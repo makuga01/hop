@@ -1,0 +1,7 @@
+/hop
+/dist/
+/coverage*
+*.test
+*.log
+.DS_Store
+__pycache__/
