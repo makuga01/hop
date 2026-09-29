@@ -41,14 +41,14 @@ class TerminalScreen(pyte.Screen):
             del self.primary
 
 
-COLS, ROWS, FPS = 110, 28, 5
-CW, CH, TOP, BOTTOM = 12, 24, 62, 78
+COLS, ROWS, FPS = 110, 28, 10
+CW, CH = 12, 24
 DURATION = 29
 STEM = "hop-demo"
-BADGE = "OFFLINE DEMO / FICTIONAL DATA"
-FOOTNOTE = "Recorded from Hop 0.1.0. Transfers are disabled in demo mode."
-SNAPSHOTS = {8: "hop-workspace.png", 69: "hop-selection.png", 93: "hop-options.png"}
-# Seconds, keyboard input, visible explanation, displayed shortcut.
+TITLE = "Hop offline demo with fictional data"
+SNAPSHOTS = {16: "hop-workspace.png", 138: "hop-selection.png", 186: "hop-options.png"}
+# Seconds, keyboard input, action description, shortcut (for script readers only).
+# The recording contains only terminal pixels, without titles or overlays.
 STEPS = [
     (0, b"", "Local and remote files, side by side", ""),
     (2, b"j", "Navigate folders with the keyboard", "j"),
@@ -132,7 +132,7 @@ def capture(binary, output, container=None):
             os.close(master)
     header = {
         "version": 2, "width": COLS, "height": ROWS, "duration": DURATION,
-        "title": "Hop — " + BADGE.lower(),
+        "title": TITLE,
         "env": {"TERM": "xterm-256color"},
     }
     (output / f"{STEM}.cast").write_text(
@@ -145,9 +145,12 @@ def render(events, output, font_path):
     screen = TerminalScreen(COLS, ROWS)
     stream = pyte.Stream(screen)
     font = ImageFont.truetype(str(font_path), 20)
-    small = ImageFont.truetype(str(font_path), 16)
-    width, height = COLS * CW + 48, ROWS * CH + TOP + BOTTOM
-    colors = {"default": "#e7fff5", "black": "#000000", "white": "#ffffff"}
+    try:
+        bold_font = ImageFont.truetype(str(font_path), 20, index=1)
+    except OSError:
+        bold_font = font
+    width, height = COLS * CW, ROWS * CH
+    colors = {"black": "#000000", "white": "#ffffff"}
 
     def color(value, default):
         if value == "default":
@@ -163,44 +166,28 @@ def render(events, output, font_path):
     ]
     encoder = subprocess.Popen(command, stdin=subprocess.PIPE)
     event_index = 0
-    caption = STEPS[0]
     try:
         for number in range(DURATION * FPS):
             timestamp = number / FPS
             while event_index < len(events) and events[event_index][0] <= timestamp:
                 stream.feed(events[event_index][2])
                 event_index += 1
-            caption = max((s for s in STEPS if s[0] <= timestamp), key=lambda s: s[0])
-            im = Image.new("RGB", (width, height), "#091e22")
+            im = Image.new("RGB", (width, height), "#1e1e1e")
             draw = ImageDraw.Draw(im)
-            draw.text((24, 19), "HOP", font=font, fill="#e7fff5")
-            draw.text((90, 22), "SSH file manager", font=small, fill="#a3d2c8")
-            label = BADGE
-            draw.text((width - 24 - draw.textlength(label, font=small), 22), label,
-                      font=small, fill="#ffa888")
             for y in range(ROWS):
                 for x in range(COLS):
                     char = screen.buffer[y][x]
-                    fg = color(char.fg, "#e7fff5")
-                    bg = color(char.bg, "#063537")
+                    fg = color(char.fg, "#e5e5e5")
+                    bg = color(char.bg, "#1e1e1e")
                     if char.reverse:
                         fg, bg = bg, fg
-                    left, top = 24 + x * CW, TOP + y * CH
+                    left, top = x * CW, y * CH
                     draw.rectangle((left, top, left + CW - 1, top + CH - 1), fill=bg)
                     if char.data.strip():
-                        draw.text((left, top + 1), char.data, font=font, fill=fg)
+                        draw.text((left, top + 1), char.data, font=bold_font if char.bold else font, fill=fg)
             if not screen.cursor.hidden:
-                left, top = 24 + screen.cursor.x * CW, TOP + screen.cursor.y * CH
-                draw.rectangle((left, top + CH - 3, left + CW - 1, top + CH - 2), fill="#e7fff5")
-            draw.text((24, height - 57), caption[2], font=font, fill="#e7fff5")
-            draw.text((24, height - 28), FOOTNOTE,
-                      font=small, fill="#a3d2c8")
-            if caption[3]:
-                text_width = draw.textlength(caption[3], font=font)
-                left = width - text_width - 40
-                draw.rounded_rectangle((left - 12, height - 61, width - 24, height - 29),
-                                       radius=7, fill="#25464a")
-                draw.text((left, height - 57), caption[3], font=font, fill="#ffa888")
+                left, top = screen.cursor.x * CW, screen.cursor.y * CH
+                draw.rectangle((left, top + CH - 3, left + CW - 1, top + CH - 2), fill="#e5e5e5")
             if number in SNAPSHOTS:
                 im.save(output / SNAPSHOTS[number])
             encoder.stdin.write(im.tobytes())
@@ -212,14 +199,14 @@ def render(events, output, font_path):
     subprocess.run([
         "ffmpeg", "-v", "error", "-y", "-i", str(output / f"{STEM}.mp4"),
         "-filter_complex",
-        "fps=5,scale=1000:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];"
+        "fps=10,scale=1100:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];"
         "[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
         "-loop", "0", str(output / f"{STEM}.gif"),
     ], check=True)
 
 
 def main():
-    global DURATION, STEM, BADGE, FOOTNOTE, STEPS, SNAPSHOTS
+    global DURATION, STEM, TITLE, STEPS, SNAPSHOTS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("docs/media"))
     parser.add_argument("--binary", type=Path, default=Path("hop"))
@@ -229,9 +216,8 @@ def main():
     args = parser.parse_args()
     if args.container:
         DURATION, STEM = 33, "hop-walkthrough"
-        BADGE = "REAL SSH / FICTIONAL DATA"
-        FOOTNOTE = "Isolated local SSH server. Synthetic hosts and files. Real SFTP transfer."
-        SNAPSHOTS = {10: "hop-launch.png", 31: "hop-server-picker.png", 122: "hop-transfer.png"}
+        TITLE = "Hop SSH walkthrough using isolated fictional data"
+        SNAPSHOTS = {20: "hop-launch.png", 62: "hop-server-picker.png", 244: "hop-transfer.png"}
         STEPS = [
             (0, b"", "Start at the shell prompt", ""),
             (1, b"h", "Type hop", "h"),

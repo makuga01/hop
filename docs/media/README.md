@@ -1,5 +1,10 @@
 # Demo media
 
+All MP4s, GIFs, and screenshots show only the terminal viewport. The shell uses
+the terminal's plain dark background. Hop's own colors and interface appear
+when the program starts, and quitting restores the shell. No branding, frames,
+captions, key badges, or other graphics are added to the terminal output.
+
 ## Full SSH walkthrough
 
 `hop-walkthrough.mp4`, `hop-walkthrough.gif`, and `hop-walkthrough.cast` capture
@@ -52,7 +57,7 @@ These are recordings of the real Hop 0.1.0 terminal interface. The application
 runs in its built-in offline demo, which supplies fictional files, paths, and
 the `server (demo)` destination. Copying and remote connections are disabled.
 
-- `hop-demo.mp4`: 29-second H.264 recording with explanatory captions.
+- `hop-demo.mp4`: 29-second H.264 terminal recording.
 - `hop-demo.gif`: smaller, looping animated preview.
 - `hop-demo.cast`: raw asciicast v2 terminal output, playable with
   `asciinema play docs/media/hop-demo.cast`.
@@ -61,9 +66,9 @@ the `server (demo)` destination. Copying and remote connections are disabled.
 - `hop-options.png`: session settings with a fictional destination.
 
 The MP4 and GIF render the captured terminal stream with a monospace font.
-The title and explanatory captions are added outside the application viewport.
-No application screens are fabricated. The demo does not demonstrate a real
-transfer; its disabled transfer behavior is labeled in the video.
+The renderer preserves the shell and application's separate terminal screens.
+No application screens are fabricated. This offline demo does not demonstrate
+a real transfer; use the full SSH walkthrough above for that.
 
 ### Recreate the offline recording
 
