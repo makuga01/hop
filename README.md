@@ -3,6 +3,10 @@
 Hop is a file manager for macOS and Linux. It uses SSH to connect to a remote computer.
 The left panel shows local files. The right panel shows remote files.
 
+[![Hop demo: launch, choose an SSH server, and transfer three selected files](docs/media/hop-walkthrough.gif)](docs/media/hop-walkthrough.mp4)
+
+*21-second demo with fictional data. Click the preview for the MP4.*
+
 Hop finds computers in your SSH configuration and shell history. It is not necessary to enter the SSH address for a computer in the list.
 The machine list shows each SSH alias alongside its resolved `user@hostname`
 and port when it differs from 22, so different accounts and servers are easy to identify.
@@ -12,8 +16,6 @@ Hop uses SFTP through OpenSSH. A Hop installation on the remote computer is not 
 The [termscp](https://github.com/veeso/termscp) file manager is the design reference for the panels.
 
 ## See Hop in action
-
-![Typing hop, selecting an SSH server, and transferring multiple files](docs/media/hop-walkthrough.gif)
 
 This 21-second recording starts at a shell prompt: type `hop`, choose
 `staging-demo` from the server list, connect, open the remote destination,
