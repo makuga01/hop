@@ -17,8 +17,8 @@ dependency; installed binaries require OpenSSH and a terminal, with no Go runtim
 
 ## First GitHub release
 
-1. Choose the GitHub repository and distribution license before publishing.
-2. Add that repository as `origin`, then push `main`.
+1. Select the distribution license before publishing.
+2. Use `https://github.com/makuga01/hop.git` as `origin`, then push `main` after approval.
 3. Check `VERSION` and `CHANGELOG.md`, and ensure CI passes.
 4. Create and push the annotated version tag:
 
