@@ -9,6 +9,25 @@ Hop also uses previous transfers and remote shell history to show paths.
 Hop uses SFTP through OpenSSH. A Hop installation on the remote computer is not necessary.
 The [termscp](https://github.com/veeso/termscp) file manager is the design reference for the panels.
 
+## See Hop in action
+
+![Hop with local and remote panels and two files selected](docs/media/hop-selection.png)
+
+This 29-second recording shows the real `hop demo` interface: folder navigation,
+filtering, selecting multiple files, switching panels, and changing themes.
+All paths, filenames, and host details are fictional. Transfers are disabled in demo mode.
+
+[Watch or download the MP4](docs/media/hop-demo.mp4) ·
+[Replay the terminal recording](docs/media/hop-demo.cast) ·
+[Recording instructions](docs/media/README.md)
+
+<details>
+<summary>Play the animated preview</summary>
+
+![Recorded walkthrough of Hop's offline demo](docs/media/hop-demo.gif)
+
+</details>
+
 ## System requirements
 
 | Item | Requirement |
