@@ -14,12 +14,16 @@ the real application from the shell prompt through a successful transfer:
 2. Pick `staging-demo` (`deploy@staging.demo:2222`) from three fictional SSH aliases.
 3. Connect to a real OpenSSH server inside the isolated recording container.
 4. Navigate to the remote releases folder.
-5. Select and transfer a generated 64 MiB file over SFTP.
+5. Select `config.yaml`, `release.bin` (64 MiB), and `report.csv` with Space, then
+   transfer all three together over SFTP.
 6. Inspect the destination, then quit back to the shell.
 
-The recorder checks that the transferred file matches the source byte for byte.
-`hop-launch.png`, `hop-server-picker.png`, and `hop-transfer.png` are stills from
-this 33-second recording. The server aliases point to container loopback;
+The recorder checks that each transferred file matches its source byte for byte.
+`hop-prompt.png` is the first frame, showing the styled two-line shell prompt.
+Capture starts once this real prompt is ready, so the video opens without a blank frame.
+`hop-launch.png`, `hop-server-picker.png`, `hop-multiselect.png`, and
+`hop-transfer.png` are also stills from this 21-second recording.
+The server aliases point to container loopback;
 the container has no external network, published ports, or host mounts.
 All user accounts, data, and SSH keys are created for the recording. The picker
 also shows `developer@lab.demo:2222` and `archivist@backup.demo:2222`, making the

@@ -13,11 +13,12 @@ The [termscp](https://github.com/veeso/termscp) file manager is the design refer
 
 ## See Hop in action
 
-![Typing hop, selecting an SSH server, and transferring a file](docs/media/hop-walkthrough.gif)
+![Typing hop, selecting an SSH server, and transferring multiple files](docs/media/hop-walkthrough.gif)
 
-This 33-second recording starts at a shell prompt: type `hop`, choose
+This 21-second recording starts at a shell prompt: type `hop`, choose
 `staging-demo` from the server list, connect, open the remote destination,
-and copy a 64 MiB sample file over SFTP. It ends by quitting back to the shell.
+select three files with Space, and copy them together over SFTP.
+The selection includes a 64 MiB sample build. The recording ends at the shell prompt.
 The SSH connection and transfer are real. The server runs in an isolated local
 container with fictional accounts, SSH aliases, and generated sample files.
 

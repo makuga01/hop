@@ -90,11 +90,16 @@ def capture(binary, output, container=None):
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
         command = [str(binary), "demo", "--theme", "lagoon", "--no-history"]
         if container:
+            prompt = (
+                r"\n  \[\e[38;2;137;180;250m\]~/Projects"
+                r"\[\e[0m\]  \[\e[38;2;147;153;178m\]demo@workstation"
+                r"\[\e[0m\]\n  \[\e[38;2;166;227;161m\]❯\[\e[0m\] "
+            )
             command = [
                 "docker", "exec", "-it", "--user", "demo", "--workdir", "/home/demo/Projects",
                 "-e", "TERM=xterm-256color", "-e", "COLORTERM=truecolor",
                 "-e", "HOP_COLOR_MODE=truecolor", "-e", "HOP_HOME=/home/demo/.config/Hop",
-                "-e", "PS1=demo@workstation ~/Projects $ ", "-e", "HISTFILE=/dev/null",
+                "-e", "PS1=" + prompt, "-e", "HISTFILE=/dev/null",
                 container, "/bin/bash", "--noprofile", "--norc",
             ]
             # Docker needs its ordinary host configuration, but only the explicit
@@ -107,8 +112,19 @@ def capture(binary, output, container=None):
         )
         os.close(slave)
         decoder = codecs.getincrementaldecoder("utf-8")("strict")
-        start, step = time.monotonic(), 0
         try:
+            # Start the recording only once the real shell prompt is complete,
+            # so even frame zero contains the prompt rather than startup blankness.
+            if container:
+                opening = ""
+                deadline = time.monotonic() + 10
+                while "❯" not in opening:
+                    if time.monotonic() >= deadline or process.poll() is not None:
+                        raise RuntimeError("The recording shell did not show its prompt")
+                    if select.select([master], [], [], 0.05)[0]:
+                        opening += decoder.decode(os.read(master, 65536))
+                events.append([0, "o", opening])
+            start, step = time.monotonic(), 0
             while time.monotonic() - start < DURATION:
                 elapsed = time.monotonic() - start
                 while step < len(STEPS) and elapsed >= STEPS[step][0]:
@@ -215,34 +231,34 @@ def main():
     parser.add_argument("--cast", type=Path, help="Render an existing capture instead of recording again")
     args = parser.parse_args()
     if args.container:
-        DURATION, STEM = 33, "hop-walkthrough"
+        DURATION, STEM = 21, "hop-walkthrough"
         TITLE = "Hop SSH walkthrough using isolated fictional data"
-        SNAPSHOTS = {20: "hop-launch.png", 62: "hop-server-picker.png", 244: "hop-transfer.png"}
+        SNAPSHOTS = {
+            0: "hop-prompt.png", 14: "hop-launch.png", 31: "hop-server-picker.png",
+            117: "hop-multiselect.png", 170: "hop-transfer.png",
+        }
         STEPS = [
             (0, b"", "Start at the shell prompt", ""),
-            (1, b"h", "Type hop", "h"),
-            (1.3, b"o", "Type hop", "ho"),
-            (1.6, b"p", "Type hop", "hop"),
-            (2.5, b"\r", "Launch Hop", "Enter"),
-            (4, b"", "Hop finds servers in SSH configuration", ""),
-            (5.5, b"\x1b[B", "Choose staging-demo from the server list", "Down"),
-            (7, b"\r", "Connect over SSH", "Enter"),
-            (9, b"", "Local files on the left, server files on the right", ""),
-            (10, b"\t", "Switch to the remote panel", "Tab"),
-            (11, b"/releases", "Find the destination folder", "/  releases"),
-            (12, b"\r", "Focus the releases folder", "Enter"),
-            (13, b"\r", "Open the remote destination", "Enter"),
-            (14, b"\t", "Switch back to local files", "Tab"),
-            (15, b"/release", "Find the sample build", "/  release"),
-            (16, b"\r", "Focus release.bin", "Enter"),
-            (17, b" ", "Select the 64 MiB sample file", "Space"),
-            (18, b"\x15", "Keep the selection and show all files", "Ctrl-U"),
-            (19, b"c", "Copy the file over SFTP", "c"),
-            (24, b"\t", "Inspect the copied file on the server", "Tab"),
-            (25, b"/release", "Find the transferred file", "/  release"),
-            (26, b"\r", "The file is now in the remote releases folder", "Enter"),
-            (28, b"\x15", "Show the remote folder contents", "Ctrl-U"),
-            (30, b"q", "Quit Hop and return to the shell", "q"),
+            (0.8, b"h", "Type hop", "h"),
+            (1.0, b"o", "Type hop", "ho"),
+            (1.2, b"p", "Type hop", "hop"),
+            (1.6, b"\r", "Launch Hop", "Enter"),
+            (2.6, b"\x1b[B", "Choose staging-demo from the server list", "Down"),
+            (3.5, b"\r", "Connect over SSH", "Enter"),
+            (5, b"\t", "Switch to the remote panel", "Tab"),
+            (6, b"/releases", "Find the destination folder", "/  releases"),
+            (7, b"\r", "Focus the releases folder", "Enter"),
+            (7.4, b"\r", "Open the remote destination", "Enter"),
+            (8, b"\t", "Switch back to local files", "Tab"),
+            (8.4, b"jjj", "Focus config.yaml", "j"),
+            (9, b" ", "Select config.yaml", "Space"),
+            (9.5, b"j", "Focus release.bin", "j"),
+            (10, b" ", "Select release.bin too", "Space"),
+            (10.5, b"j", "Focus report.csv", "j"),
+            (11, b" ", "Select report.csv as the third file", "Space"),
+            (12, b"c", "Copy all three selected files over SFTP", "c"),
+            (16, b"\t", "Inspect all three copied files on the server", "Tab"),
+            (19, b"q", "Quit Hop and return to the shell", "q"),
         ]
     if not shutil.which("ffmpeg"):
         parser.error("ffmpeg is required")
@@ -254,10 +270,11 @@ def main():
     else:
         events = capture(args.binary.resolve(), args.output, args.container)
     if args.container and not args.cast:
-        subprocess.run([
-            "docker", "exec", args.container, "cmp",
-            "/home/demo/Projects/release.bin", "/home/deploy/releases/release.bin",
-        ], check=True)
+        for filename in ["config.yaml", "release.bin", "report.csv"]:
+            subprocess.run([
+                "docker", "exec", args.container, "cmp",
+                "/home/demo/Projects/" + filename, "/home/deploy/releases/" + filename,
+            ], check=True)
     render(events, args.output, args.font)
     print(f"Saved isolated demo recording and screenshots to {args.output}")
 
