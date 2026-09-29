@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Record the real offline demo to an asciicast, PNG, GIF, and MP4.
+"""Record Hop's offline demo or an isolated real SSH walkthrough.
 
 Requires Python 3, Pillow, pyte 0.8.2, ffmpeg, and a monospace TrueType font.
-Run `make build` first. No desktop capture or real SSH connections are used.
+Run `make build` first. For --container, prepare the recording fixture instead.
+Only application terminal output is recorded; no desktop capture is used.
 """
 
 import argparse
 import codecs
+import copy
 import fcntl
 import json
 import os
@@ -23,9 +25,29 @@ from PIL import Image, ImageDraw, ImageFont
 import pyte
 
 
+class TerminalScreen(pyte.Screen):
+    """Preserve the shell screen across Hop's alternate-screen session."""
+
+    def set_mode(self, *modes, **kwargs):
+        if kwargs.get("private") and 1049 in modes:
+            self.primary = copy.deepcopy((self.buffer, self.cursor, self.margins, self.mode))
+            self.reset()
+        super().set_mode(*modes, **kwargs)
+
+    def reset_mode(self, *modes, **kwargs):
+        super().reset_mode(*modes, **kwargs)
+        if kwargs.get("private") and 1049 in modes and hasattr(self, "primary"):
+            self.buffer, self.cursor, self.margins, self.mode = self.primary
+            del self.primary
+
+
 COLS, ROWS, FPS = 110, 28, 5
 CW, CH, TOP, BOTTOM = 12, 24, 62, 78
 DURATION = 29
+STEM = "hop-demo"
+BADGE = "OFFLINE DEMO / FICTIONAL DATA"
+FOOTNOTE = "Recorded from Hop 0.1.0. Transfers are disabled in demo mode."
+SNAPSHOTS = {8: "hop-workspace.png", 69: "hop-selection.png", 93: "hop-options.png"}
 # Seconds, keyboard input, visible explanation, displayed shortcut.
 STEPS = [
     (0, b"", "Local and remote files, side by side", ""),
@@ -53,7 +75,7 @@ STEPS = [
 ]
 
 
-def capture(binary, output):
+def capture(binary, output, container=None):
     events = []
     with tempfile.TemporaryDirectory(prefix="hop-demo-") as isolated:
         # An allowlist prevents shell/SSH/history settings from entering the app.
@@ -66,8 +88,20 @@ def capture(binary, output):
         }
         master, slave = os.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+        command = [str(binary), "demo", "--theme", "lagoon", "--no-history"]
+        if container:
+            command = [
+                "docker", "exec", "-it", "--user", "demo", "--workdir", "/home/demo/Projects",
+                "-e", "TERM=xterm-256color", "-e", "COLORTERM=truecolor",
+                "-e", "HOP_COLOR_MODE=truecolor", "-e", "HOP_HOME=/home/demo/.config/Hop",
+                "-e", "PS1=demo@workstation ~/Projects $ ", "-e", "HISTFILE=/dev/null",
+                container, "/bin/bash", "--noprofile", "--norc",
+            ]
+            # Docker needs its ordinary host configuration, but only the explicit
+            # variables above enter the isolated container. No host files are mounted.
+            env = dict(os.environ)
         process = subprocess.Popen(
-            [str(binary), "demo", "--theme", "lagoon", "--no-history"],
+            command,
             stdin=slave, stdout=slave, stderr=slave, cwd=isolated,
             env=env, start_new_session=True,
         )
@@ -89,7 +123,7 @@ def capture(binary, output):
                     raise RuntimeError("Demo exited before the recording finished")
         finally:
             if process.poll() is None:
-                os.write(master, b"\x03")
+                os.write(master, b"\x04" if container else b"\x03")
                 try:
                     process.wait(timeout=3)
                 except subprocess.TimeoutExpired:
@@ -98,17 +132,17 @@ def capture(binary, output):
             os.close(master)
     header = {
         "version": 2, "width": COLS, "height": ROWS, "duration": DURATION,
-        "title": "Hop — offline demo with fictional data",
+        "title": "Hop — " + BADGE.lower(),
         "env": {"TERM": "xterm-256color"},
     }
-    (output / "hop-demo.cast").write_text(
+    (output / f"{STEM}.cast").write_text(
         "\n".join(json.dumps(item, ensure_ascii=False) for item in [header, *events]) + "\n"
     )
     return events
 
 
 def render(events, output, font_path):
-    screen = pyte.Screen(COLS, ROWS)
+    screen = TerminalScreen(COLS, ROWS)
     stream = pyte.Stream(screen)
     font = ImageFont.truetype(str(font_path), 20)
     small = ImageFont.truetype(str(font_path), 16)
@@ -120,13 +154,12 @@ def render(events, output, font_path):
             return default
         return colors.get(value, "#" + value if len(value) == 6 else value)
 
-    snapshots = {8: "hop-workspace.png", 69: "hop-selection.png", 93: "hop-options.png"}
     # Stream RGB frames directly to ffmpeg rather than keeping full frames on disk.
     command = [
         "ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24",
         "-s", f"{width}x{height}", "-r", str(FPS), "-i", "-", "-an",
         "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart", "-map_metadata", "-1", str(output / "hop-demo.mp4"),
+        "-movflags", "+faststart", "-map_metadata", "-1", str(output / f"{STEM}.mp4"),
     ]
     encoder = subprocess.Popen(command, stdin=subprocess.PIPE)
     event_index = 0
@@ -142,7 +175,7 @@ def render(events, output, font_path):
             draw = ImageDraw.Draw(im)
             draw.text((24, 19), "HOP", font=font, fill="#e7fff5")
             draw.text((90, 22), "SSH file manager", font=small, fill="#a3d2c8")
-            label = "OFFLINE DEMO / FICTIONAL DATA"
+            label = BADGE
             draw.text((width - 24 - draw.textlength(label, font=small), 22), label,
                       font=small, fill="#ffa888")
             for y in range(ROWS):
@@ -156,8 +189,11 @@ def render(events, output, font_path):
                     draw.rectangle((left, top, left + CW - 1, top + CH - 1), fill=bg)
                     if char.data.strip():
                         draw.text((left, top + 1), char.data, font=font, fill=fg)
+            if not screen.cursor.hidden:
+                left, top = 24 + screen.cursor.x * CW, TOP + screen.cursor.y * CH
+                draw.rectangle((left, top + CH - 3, left + CW - 1, top + CH - 2), fill="#e7fff5")
             draw.text((24, height - 57), caption[2], font=font, fill="#e7fff5")
-            draw.text((24, height - 28), "Recorded from Hop 0.1.0. Transfers are disabled in demo mode.",
+            draw.text((24, height - 28), FOOTNOTE,
                       font=small, fill="#a3d2c8")
             if caption[3]:
                 text_width = draw.textlength(caption[3], font=font)
@@ -165,8 +201,8 @@ def render(events, output, font_path):
                 draw.rounded_rectangle((left - 12, height - 61, width - 24, height - 29),
                                        radius=7, fill="#25464a")
                 draw.text((left, height - 57), caption[3], font=font, fill="#ffa888")
-            if number in snapshots:
-                im.save(output / snapshots[number])
+            if number in SNAPSHOTS:
+                im.save(output / SNAPSHOTS[number])
             encoder.stdin.write(im.tobytes())
     finally:
         encoder.stdin.close()
@@ -174,26 +210,68 @@ def render(events, output, font_path):
     if result:
         raise RuntimeError("ffmpeg failed to encode the recording")
     subprocess.run([
-        "ffmpeg", "-v", "error", "-y", "-i", str(output / "hop-demo.mp4"),
+        "ffmpeg", "-v", "error", "-y", "-i", str(output / f"{STEM}.mp4"),
         "-filter_complex",
         "fps=5,scale=1000:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];"
         "[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle",
-        "-loop", "0", str(output / "hop-demo.gif"),
+        "-loop", "0", str(output / f"{STEM}.gif"),
     ], check=True)
 
 
 def main():
+    global DURATION, STEM, BADGE, FOOTNOTE, STEPS, SNAPSHOTS
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("docs/media"))
     parser.add_argument("--binary", type=Path, default=Path("hop"))
     parser.add_argument("--font", type=Path, default=Path("/System/Library/Fonts/Menlo.ttc"))
+    parser.add_argument("--container", help="Record the shell and real SSH flow in the isolated fixture")
+    parser.add_argument("--cast", type=Path, help="Render an existing capture instead of recording again")
     args = parser.parse_args()
+    if args.container:
+        DURATION, STEM = 33, "hop-walkthrough"
+        BADGE = "REAL SSH / FICTIONAL DATA"
+        FOOTNOTE = "Isolated local SSH server. Synthetic hosts and files. Real SFTP transfer."
+        SNAPSHOTS = {10: "hop-launch.png", 31: "hop-server-picker.png", 122: "hop-transfer.png"}
+        STEPS = [
+            (0, b"", "Start at the shell prompt", ""),
+            (1, b"h", "Type hop", "h"),
+            (1.3, b"o", "Type hop", "ho"),
+            (1.6, b"p", "Type hop", "hop"),
+            (2.5, b"\r", "Launch Hop", "Enter"),
+            (4, b"", "Hop finds servers in SSH configuration", ""),
+            (5.5, b"\x1b[B", "Choose staging-demo from the server list", "Down"),
+            (7, b"\r", "Connect over SSH", "Enter"),
+            (9, b"", "Local files on the left, server files on the right", ""),
+            (10, b"\t", "Switch to the remote panel", "Tab"),
+            (11, b"/releases", "Find the destination folder", "/  releases"),
+            (12, b"\r", "Focus the releases folder", "Enter"),
+            (13, b"\r", "Open the remote destination", "Enter"),
+            (14, b"\t", "Switch back to local files", "Tab"),
+            (15, b"/release", "Find the sample build", "/  release"),
+            (16, b"\r", "Focus release.bin", "Enter"),
+            (17, b" ", "Select the 64 MiB sample file", "Space"),
+            (18, b"\x15", "Keep the selection and show all files", "Ctrl-U"),
+            (19, b"c", "Copy the file over SFTP", "c"),
+            (24, b"\t", "Inspect the copied file on the server", "Tab"),
+            (25, b"/release", "Find the transferred file", "/  release"),
+            (26, b"\r", "The file is now in the remote releases folder", "Enter"),
+            (28, b"\x15", "Show the remote folder contents", "Ctrl-U"),
+            (30, b"q", "Quit Hop and return to the shell", "q"),
+        ]
     if not shutil.which("ffmpeg"):
         parser.error("ffmpeg is required")
     if not args.font.exists():
         parser.error("Pass --font with a monospace TrueType font on this system")
     args.output.mkdir(parents=True, exist_ok=True)
-    events = capture(args.binary.resolve(), args.output)
+    if args.cast:
+        events = [json.loads(line) for line in args.cast.read_text().splitlines()][1:]
+    else:
+        events = capture(args.binary.resolve(), args.output, args.container)
+    if args.container and not args.cast:
+        subprocess.run([
+            "docker", "exec", args.container, "cmp",
+            "/home/demo/Projects/release.bin", "/home/deploy/releases/release.bin",
+        ], check=True)
     render(events, args.output, args.font)
     print(f"Saved isolated demo recording and screenshots to {args.output}")
 

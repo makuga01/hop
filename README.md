@@ -11,20 +11,24 @@ The [termscp](https://github.com/veeso/termscp) file manager is the design refer
 
 ## See Hop in action
 
-![Hop with local and remote panels and two files selected](docs/media/hop-selection.png)
+![Typing hop, selecting an SSH server, and transferring a file](docs/media/hop-walkthrough.gif)
 
-This 29-second recording shows the real `hop demo` interface: folder navigation,
-filtering, selecting multiple files, switching panels, and changing themes.
-All paths, filenames, and host details are fictional. Transfers are disabled in demo mode.
+This 33-second recording starts at a shell prompt: type `hop`, choose
+`staging-demo` from the server list, connect, open the remote destination,
+and copy a 64 MiB sample file over SFTP. It ends by quitting back to the shell.
+The SSH connection and transfer are real. The server runs in an isolated local
+container with fictional accounts, SSH aliases, and generated sample files.
 
-[Watch or download the MP4](docs/media/hop-demo.mp4) ·
-[Replay the terminal recording](docs/media/hop-demo.cast) ·
+[Watch or download the MP4](docs/media/hop-walkthrough.mp4) ·
+[Replay the terminal recording](docs/media/hop-walkthrough.cast) ·
 [Recording instructions](docs/media/README.md)
 
 <details>
-<summary>Play the animated preview</summary>
+<summary>More: selections, filtering, and color themes in offline demo mode</summary>
 
 ![Recorded walkthrough of Hop's offline demo](docs/media/hop-demo.gif)
+
+This separate offline demo uses fictional data and disables transfers.
 
 </details>
 
