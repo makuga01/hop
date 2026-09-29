@@ -6,9 +6,30 @@ Copy files between your computer and SSH servers in a two-panel terminal file ma
 
 Uses your existing SSH config, keys, agent, and jump hosts. Nothing to install on the server.
 
-## Get started
+## Install
 
-For macOS and Linux. Building requires **Go 1.24+**; connecting requires OpenSSH.
+**[Download the latest release](https://github.com/makuga01/hop/releases/latest)** for macOS or Linux. Choose the archive for your processor:
+
+| Platform | Download |
+| --- | --- |
+| macOS · Apple Silicon | [ARM64](https://github.com/makuga01/hop/releases/download/v0.1.0/hop_0.1.0_darwin_arm64.tar.gz) |
+| macOS · Intel | [AMD64](https://github.com/makuga01/hop/releases/download/v0.1.0/hop_0.1.0_darwin_amd64.tar.gz) |
+| Linux · Intel / AMD | [AMD64](https://github.com/makuga01/hop/releases/download/v0.1.0/hop_0.1.0_linux_amd64.tar.gz) |
+| Linux · ARM | [ARM64](https://github.com/makuga01/hop/releases/download/v0.1.0/hop_0.1.0_linux_arm64.tar.gz) |
+
+Extract the archive, then run these commands in the extracted folder:
+
+```sh
+mkdir -p ~/.local/bin
+install -m 755 hop ~/.local/bin/hop
+export PATH="$HOME/.local/bin:$PATH"
+hop
+```
+
+Requires OpenSSH. The downloads run without Go or Python.
+
+<details>
+<summary>Build from source instead (Go 1.24+)</summary>
 
 ```sh
 git clone https://github.com/makuga01/hop.git
@@ -17,6 +38,10 @@ make install
 export PATH="$HOME/.local/bin:$PATH"
 hop
 ```
+
+</details>
+
+## Connect
 
 Pick a server from your SSH config or history. Each entry shows its alias and `user@hostname`, so you know where you're connecting.
 
