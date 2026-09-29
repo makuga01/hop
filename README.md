@@ -8,25 +8,15 @@ Uses your existing SSH config, keys, agent, and jump hosts. Nothing to install o
 
 ## Install
 
-**[Download the latest release](https://github.com/makuga01/hop/releases/latest)** for macOS or Linux. Choose the archive for your processor:
-
-| Platform | Download |
-| --- | --- |
-| macOS · Apple Silicon | [ARM64](https://github.com/makuga01/hop/releases/download/v0.1.0/hop_0.1.0_darwin_arm64.tar.gz) |
-| macOS · Intel | [AMD64](https://github.com/makuga01/hop/releases/download/v0.1.0/hop_0.1.0_darwin_amd64.tar.gz) |
-| Linux · Intel / AMD | [AMD64](https://github.com/makuga01/hop/releases/download/v0.1.0/hop_0.1.0_linux_amd64.tar.gz) |
-| Linux · ARM | [ARM64](https://github.com/makuga01/hop/releases/download/v0.1.0/hop_0.1.0_linux_arm64.tar.gz) |
-
-Extract the archive, then run these commands in the extracted folder:
-
 ```sh
-mkdir -p ~/.local/bin
-install -m 755 hop ~/.local/bin/hop
-export PATH="$HOME/.local/bin:$PATH"
-hop
+curl -fsSL https://raw.githubusercontent.com/makuga01/hop/main/scripts/install.sh | sh
 ```
 
-Requires OpenSSH. The downloads run without Go or Python.
+Downloads the latest build for your Mac or Linux machine, verifies its checksum, and
+installs it to `~/.local/bin/hop`. **No sudo, PATH changes, or shell profile edits.**
+If `hop` isn't on your PATH, run `~/.local/bin/hop`.
+
+[Manual download](https://github.com/makuga01/hop/releases/latest) · [Read the installer](scripts/install.sh)
 
 <details>
 <summary>Build from source instead (Go 1.24+)</summary>
@@ -35,8 +25,7 @@ Requires OpenSSH. The downloads run without Go or Python.
 git clone https://github.com/makuga01/hop.git
 cd hop
 make install
-export PATH="$HOME/.local/bin:$PATH"
-hop
+~/.local/bin/hop
 ```
 
 </details>

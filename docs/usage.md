@@ -20,8 +20,23 @@ The machine picker shows the resolved login user, hostname, and any port other t
 You can filter by alias or destination, or type a new SSH destination.
 
 The terminal must be at least 64 columns by 18 rows; 100 columns gives filenames more room.
-The installer puts `hop` in `~/.local/bin`. To keep it on your PATH, add
-`export PATH="$HOME/.local/bin:$PATH"` to your shell startup file.
+The installer downloads the latest release for your platform, verifies SHA-256,
+and installs the binary to `~/.local/bin/hop`. It doesn't use sudo, edit shell
+profiles, or change PATH. It replaces an existing regular `hop` file only after
+the download and binary checks succeed; symlinks and directories are left alone.
+Temporary download files are removed when it exits.
+
+If `hop` isn't found, launch `~/.local/bin/hop`. You can add `~/.local/bin` to PATH
+yourself if you want; the installer won't do it for you.
+
+To choose a different installation directory:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/makuga01/hop/main/scripts/install.sh | HOP_INSTALL_DIR=/your/bin sh
+```
+
+The installer requires a public GitHub release and common system tools: curl,
+tar, and either `sha256sum` or `shasum`. It doesn't require Go or Python.
 
 ## Keyboard reference
 
