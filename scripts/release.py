@@ -30,7 +30,7 @@ def main():
         for system, arch in TARGETS:
             env = dict(os.environ, GOOS=system, GOARCH=arch, CGO_ENABLED="0")
             subprocess.run([os.environ.get("GO", "go"), "build", "-trimpath", "-buildvcs=false",
-                            f"-ldflags=-s -w -X main.version={version}", "-o", str(binary), "."],
+                            f"-ldflags=-s -w -X main.version={version}", "-o", str(binary), "./cmd/hop"],
                            cwd=ROOT, env=env, check=True)
             archive = out / f"hop_{version}_{system}_{arch}.tar.gz"
             def metadata(info):

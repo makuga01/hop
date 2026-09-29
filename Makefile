@@ -4,7 +4,7 @@ PREFIX ?= $(HOME)/.local
 
 .PHONY: build test vet check dist install
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$(VERSION)" -o hop .
+	CGO_ENABLED=0 $(GO) build -trimpath -buildvcs=false -ldflags="-s -w -X main.version=$(VERSION)" -o hop ./cmd/hop
 test:
 	$(GO) test -race -timeout 120s ./...
 vet:

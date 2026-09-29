@@ -42,7 +42,7 @@ case "$(docker info --format '{{.Architecture}}')" in
   *) echo 'Unsupported Docker architecture'; exit 1 ;;
 esac
 GOOS=linux GOARCH="$recording_arch" CGO_ENABLED=0 go build -trimpath -buildvcs=false \
-  -ldflags="-s -w -X main.version=$(cat VERSION)" -o "$recording_build_dir/hop" .
+  -ldflags="-s -w -X main.version=$(cat VERSION)" -o "$recording_build_dir/hop" ./cmd/hop
 cp scripts/recording-fixture/Dockerfile scripts/recording-fixture/start.sh "$recording_build_dir/"
 docker build -t hop-recording-fixture:local "$recording_build_dir"
 docker run -d --rm --network none --name hop-recording --hostname workstation hop-recording-fixture:local

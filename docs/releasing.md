@@ -1,5 +1,7 @@
 # Releasing Hop
 
+Run the commands below from the repository root.
+
 ## Local validation
 
 Go 1.24+, Python 3, and a local OpenSSH SFTP server are required for the full test suite.

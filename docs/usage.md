@@ -135,6 +135,9 @@ Keep a separate `HOP_HOME` if you also use the older single-panel `hop-classic`.
 
 ## Development
 
+Application code and tests live in `cmd/hop/`; terminal test fixtures are in
+`cmd/hop/testdata/`. Build and recording scripts live in `scripts/`.
+
 ```sh
 make build   # Build ./hop
 make check   # Race tests, vet, and formatting checks
@@ -143,5 +146,5 @@ make dist    # Build archives for macOS/Linux on AMD64/ARM64
 
 Tests need Python 3 and a local OpenSSH SFTP server. On Debian/Ubuntu, install
 `python3` and `openssh-sftp-server`. Tests use local processes and pseudo-terminals.
-See [RELEASING.md](../RELEASING.md) for publishing and [the media guide](media/README.md)
+See [the release guide](releasing.md) for publishing and [the media guide](media/README.md)
 for recreating the demo recordings.

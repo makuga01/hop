@@ -47,6 +47,6 @@ Works in either direction. With nothing selected, `c` copies the item under the 
 
 You can also move with `m` or delete with `D`. Both ask for confirmation; deletion is permanent.
 
-[Full controls and settings](docs/usage.md) · [Build and release notes](RELEASING.md) · [Watch the demo](docs/media/hop-walkthrough.mp4)
+[Full controls and settings](docs/usage.md) · [Build and release notes](docs/releasing.md) · [Watch the demo](docs/media/hop-walkthrough.mp4)
 
 Inspired by [termscp](https://github.com/veeso/termscp).
