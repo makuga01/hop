@@ -75,3 +75,8 @@ You can also move with `m` or delete with `D`. Both ask for confirmation; deleti
 [Full controls and settings](docs/usage.md) · [Build and release notes](docs/releasing.md) · [Watch the demo](docs/media/hop-walkthrough.mp4)
 
 Inspired by [termscp](https://github.com/veeso/termscp).
+
+note:
+
+This is a pure vibed-up slop, just wanted to share it because it made me scp things faster 🤷‍♂️
+enjoy
