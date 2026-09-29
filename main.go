@@ -198,6 +198,7 @@ func selectHost(o Options, d Discovery, s State) (Host, *Session, error) {
 	if o.Last {
 		return d.Hosts[0], nil, nil
 	}
+	resolveHostDetails(d.Hosts, o.SSH)
 	items := []PickItem{}
 	for _, h := range d.Hosts {
 		items = append(items, PickItem{Label: h.Target, Detail: hostDetail(h), Value: h.Key()})
@@ -325,6 +326,7 @@ func run(args []string) (runErr error) {
 			enc.SetIndent("", "  ")
 			return enc.Encode(d.Hosts)
 		}
+		resolveHostDetails(d.Hosts, o.SSH)
 		for i, h := range d.Hosts {
 			fmt.Printf("%2d  %-30s  %s\n", i+1, safeText(h.Target), safeText(hostDetail(h)))
 		}

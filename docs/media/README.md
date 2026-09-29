@@ -11,7 +11,7 @@ captions, key badges, or other graphics are added to the terminal output.
 the real application from the shell prompt through a successful transfer:
 
 1. Type `hop` and press Enter.
-2. Pick `staging-demo` from three fictional SSH aliases.
+2. Pick `staging-demo` (`deploy@staging.demo:2222`) from three fictional SSH aliases.
 3. Connect to a real OpenSSH server inside the isolated recording container.
 4. Navigate to the remote releases folder.
 5. Select and transfer a generated 64 MiB file over SFTP.
@@ -21,7 +21,9 @@ The recorder checks that the transferred file matches the source byte for byte.
 `hop-launch.png`, `hop-server-picker.png`, and `hop-transfer.png` are stills from
 this 33-second recording. The server aliases point to container loopback;
 the container has no external network, published ports, or host mounts.
-Both user accounts, all data, and the SSH keys are created for the recording.
+All user accounts, data, and SSH keys are created for the recording. The picker
+also shows `developer@lab.demo:2222` and `archivist@backup.demo:2222`, making the
+different accounts and destinations visible.
 
 ### Recreate the full walkthrough
 

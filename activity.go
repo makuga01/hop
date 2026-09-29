@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"time"
 )
@@ -133,5 +132,3 @@ func (a *activity) Stop() {
 		}
 	})
 }
-
-func hostDetail(h Host) string { return strings.Join(h.Options, " ") }

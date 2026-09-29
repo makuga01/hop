@@ -18,6 +18,7 @@ type Host struct {
 	Source   string   `json:"source,omitempty"`
 	LastUsed int64    `json:"last_used,omitempty"`
 	Order    int      `json:"-"`
+	Endpoint string   `json:"-"`
 }
 
 func (h Host) Key() string {

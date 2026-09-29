@@ -4,6 +4,8 @@ Hop is a file manager for macOS and Linux. It uses SSH to connect to a remote co
 The left panel shows local files. The right panel shows remote files.
 
 Hop finds computers in your SSH configuration and shell history. It is not necessary to enter the SSH address for a computer in the list.
+The machine list shows each SSH alias alongside its resolved `user@hostname`
+and port when it differs from 22, so different accounts and servers are easy to identify.
 Hop also uses previous transfers and remote shell history to show paths.
 
 Hop uses SFTP through OpenSSH. A Hop installation on the remote computer is not necessary.

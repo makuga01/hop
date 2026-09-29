@@ -182,7 +182,12 @@ func (p Picker) Run() (PickResult, error) {
 				item := matches[i]
 				line = "  " + item.Label
 				if item.Detail != "" {
-					line += "   " + item.Detail
+					if p.HostInput {
+						aliasWidth := min(24, max(10, (screenWidth-6)/3))
+						line = "  " + fit(item.Label, aliasWidth) + "  " + item.Detail
+					} else {
+						line += "   " + item.Detail
+					}
 				}
 				if i == selected {
 					style = uiSelected
