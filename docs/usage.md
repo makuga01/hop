@@ -114,6 +114,27 @@ Transfers use one SSH/SFTP connection and copy files sequentially. Many small fi
 can be slow because each requires separate SFTP requests.
 If a connection or transfer fails, the panels stay open with Retry and Options available.
 
+## Faster repeat transfers
+
+When replacing files of at least 1 MiB, Hop can reuse matching blocks and send
+only the changed ranges. It verifies the assembled file with SHA-256 before
+replacing the destination. No rsync or remote installation is needed.
+
+The fast path needs noninteractive SSH with a POSIX shell and either Python 3
+or `dd` plus `sha256sum`, `shasum`, or OpenSSL. Upload reuse also needs the
+server's `copy-data` SFTP extension. Missing capabilities fall back to ordinary
+pipelined SFTP, including on SFTP-only servers. Fresh files use SFTP directly.
+
+Block signatures start at 64 KiB. When Python is available, a rolling checksum
+search can reuse data shifted by insertions or deletions; SHA-256 confirms every
+match. The shell-only helper uses fixed blocks. Files with less than half their
+bytes reusable use a full transfer. Fresh copies and complete replacements do
+not gain from delta reuse.
+
+Set `HOP_TRANSFER_BACKEND=sftp` to force full SFTP transfers. The older rsync
+experiment remains available only with `HOP_TRANSFER_BACKEND=rsync`; Hop does
+not look for or run rsync by default.
+
 ## Settings, history, and themes
 
 Press `o` to change overwrite behavior, copy confirmations, preview mode, remote history,

@@ -22,6 +22,7 @@ func styled(s, style string, color bool) string {
 // A heartbeat runs independently of SFTP replies, including OPEN, CLOSE and
 // RENAME. Silence from a server never looks like an unacknowledged confirmation.
 type activity struct {
+	file              *fileProgress
 	mu                sync.Mutex
 	parent            *batchProgress
 	out               io.Writer
@@ -106,6 +107,10 @@ func (a *activity) Phase(phase string) {
 	a.render(0)
 }
 func (a *activity) Update(n uint64) {
+	if a.file != nil {
+		a.file.update(n)
+		return
+	}
 	if a.parent != nil {
 		a.parent.mu.Lock()
 		if a.transfer {

@@ -47,17 +47,20 @@ func sendFile(s *SFTP, h Host, local, remote string, o Options) error {
 	}
 	checking := o.activity("Checking upload destination", 0, false)
 	defer checking.Stop()
-	home, e := s.Realpath(".")
-	if e != nil {
-		return e
-	}
-	remote = expandRemote(remote, home)
-	a, e := s.Stat(remote, true)
-	if e != nil && !noSuch(e) {
-		return e
-	}
-	if e == nil && a.Dir() {
-		remote = path.Join(remote, filepath.Base(local))
+	var a Attr
+	if !o.exactDestination {
+		home, err := s.Realpath(".")
+		if err != nil {
+			return err
+		}
+		remote = expandRemote(remote, home)
+		a, e = s.Stat(remote, true)
+		if e != nil && !noSuch(e) {
+			return e
+		}
+		if e == nil && a.Dir() {
+			remote = path.Join(remote, filepath.Base(local))
+		}
 	}
 	parent, e := s.Stat(path.Dir(remote), true)
 	if e != nil {
@@ -102,7 +105,14 @@ func sendFile(s *SFTP, h Host, local, remote string, o Options) error {
 			}
 		}
 	}()
-	if e = s.Upload(f, temp, uint64(initial.Size()), uint32(initial.Mode().Perm()), status.Update); e != nil {
+	handled := false
+	if exists {
+		handled, e = s.deltaUpload(h, f, temp, remote, uint64(initial.Size()), existing.Size, uint32(initial.Mode().Perm()), status.Update)
+	}
+	if e == nil && !handled {
+		e = s.Upload(f, temp, uint64(initial.Size()), uint32(initial.Mode().Perm()), status.Update)
+	}
+	if e != nil {
 		return e
 	}
 	status.Phase("Verifying upload")
@@ -129,19 +139,23 @@ func sendFile(s *SFTP, h Host, local, remote string, o Options) error {
 	if o.Progress == nil {
 		fmt.Println("\n✓ Uploaded", safeText(filepath.Base(local)))
 	}
-	if e = rememberTransfer(h, remote, local, "send"); e != nil {
-		o.warning("Could not save transfer history: " + e.Error())
+	if !o.deferHistory {
+		if e = rememberTransfer(h, remote, local, "send"); e != nil {
+			o.warning("Could not save transfer history: " + e.Error())
+		}
 	}
 	return nil
 }
 func getFile(s *SFTP, h Host, remote, to string, o Options) error {
 	checking := o.activity("Checking download", 0, false)
 	defer checking.Stop()
-	home, e := s.Realpath(".")
-	if e != nil {
-		return e
+	if !o.exactDestination {
+		home, err := s.Realpath(".")
+		if err != nil {
+			return err
+		}
+		remote = expandRemote(remote, home)
 	}
-	remote = expandRemote(remote, home)
 	initial, e := s.Stat(remote, true)
 	if e != nil {
 		return e
@@ -153,7 +167,7 @@ func getFile(s *SFTP, h Host, remote, to string, o Options) error {
 		return errors.New("server did not report file size")
 	}
 	to = homeExpand(to)
-	if info, e := os.Stat(to); e == nil && info.IsDir() {
+	if info, e := os.Stat(to); !o.exactDestination && e == nil && info.IsDir() {
 		to = filepath.Join(to, path.Base(remote))
 	}
 	to, e = filepath.Abs(to)
@@ -188,7 +202,14 @@ func getFile(s *SFTP, h Host, remote, to string, o Options) error {
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
-	if e = s.Download(remote, f, initial.Size, status.Update); e != nil {
+	handled := false
+	if exists {
+		handled, e = s.deltaDownload(h, remote, to, f, initial.Size, uint64(existing.Size()), status.Update)
+	}
+	if e == nil && !handled {
+		e = s.Download(remote, f, initial.Size, status.Update)
+	}
+	if e != nil {
 		return e
 	}
 	status.Phase("Verifying download")
@@ -221,8 +242,10 @@ func getFile(s *SFTP, h Host, remote, to string, o Options) error {
 	if o.Progress == nil {
 		fmt.Println("\n✓ Downloaded", safeText(to))
 	}
-	if e = rememberTransfer(h, remote, to, "get"); e != nil {
-		o.warning("Could not save transfer history: " + e.Error())
+	if !o.deferHistory {
+		if e = rememberTransfer(h, remote, to, "get"); e != nil {
+			o.warning("Could not save transfer history: " + e.Error())
+		}
 	}
 	return nil
 }

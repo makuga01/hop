@@ -65,6 +65,9 @@ The inherited send/get/ssh and shell-init commands remain available.
 `
 
 type Options struct {
+	exactDestination                                     bool
+	fileProgress                                         *fileProgress
+	deferHistory                                         bool
 	Host, Path, To, Session, Theme                       string
 	Last, Yes, Overwrite, DryRun, NoHistory, Track, JSON bool
 	SkipReview                                           bool
@@ -433,6 +436,11 @@ func run(args []string) (runErr error) {
 			remote = result.Directory
 		}
 		if len(sourceFiles) == 1 && !sourceFiles[0].Dir && o.Path != "" {
+			if rsyncSingleCandidate(o, sourceFiles[0].Size) {
+				if dest, ok := rsyncUploadDirectory(sftp, sourceFiles[0].Path, remote); ok {
+					return copyBatch(sftp, h, sourceFiles, dest, false, o)
+				}
+			}
 			return sendFile(sftp, h, sourceFiles[0].Path, remote, o)
 		}
 		return copyBatch(sftp, h, sourceFiles, remote, false, o)
@@ -449,6 +457,11 @@ func run(args []string) (runErr error) {
 		}
 		if a.Dir() {
 			return copyBatch(sftp, h, []FileItem{{Name: path.Base(remote), Path: remote, Dir: true}}, o.To, true, o)
+		}
+		if rsyncSingleCandidate(o, a.Size) {
+			if dest, ok := rsyncDownloadDirectory(remote, o.To); ok {
+				return copyBatch(sftp, h, []FileItem{{Name: path.Base(remote), Path: remote, Regular: true}}, dest, true, o)
+			}
 		}
 		return getFile(sftp, h, remote, o.To, o)
 	}

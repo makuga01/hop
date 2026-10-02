@@ -30,7 +30,7 @@ func TestHistoryConnections(t *testing.T) {
 		ok           bool
 	}{
 		{`ssh prod`, "prod", nil, true},
-		{`: 1770000000:0;ssh -i '/tmp/work key' -p 2222 marek@203.0.113.42`, "marek@203.0.113.42", []string{"-i", "/tmp/work key", "-p", "2222"}, true},
+		{`: 1770000000:0;ssh -i '/tmp/work key' -p 2222 tester@203.0.113.42`, "tester@203.0.113.42", []string{"-i", "/tmp/work key", "-p", "2222"}, true},
 		{`ssh -vv -J jump -l deploy prod 'ls /srv'`, "prod", []string{"-J", "jump", "-l", "deploy"}, true},
 		{`scp -P 2222 '/tmp/a b' 'user@[2001:db8::1]:/srv/a b'`, "user@2001:db8::1", []string{"-p", "2222"}, true},
 		{`sftp -P2200 user@host`, "user@host", []string{"-p", "2200"}, true},

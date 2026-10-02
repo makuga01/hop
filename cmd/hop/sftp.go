@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -69,15 +70,30 @@ type Entry struct {
 	Attr Attr
 }
 type SFTP struct {
-	in        io.WriteCloser
-	out       io.Reader
-	cmd       *exec.Cmd
-	id        uint32
-	mu        sync.Mutex
-	ext       map[string]string
-	closeOnce sync.Once
-	abortOnce sync.Once
-	timeout   time.Duration
+	deltaHash      func(context.Context, string, uint64, uint64) ([]byte, error)
+	deltaTransfers atomic.Uint64
+	deltaReused    atomic.Uint64
+	externalOnce   sync.Once
+	externalCtx    context.Context
+	externalCancel context.CancelFunc
+	rsyncOnce      sync.Once
+	rsyncCap       *rsyncCapability
+	limitsOnce     sync.Once
+	limits         transferLimits
+	limitsErr      error
+	in             io.WriteCloser
+	out            io.Reader
+	cmd            *exec.Cmd
+	id             uint32
+	mu             sync.Mutex
+	writeMu        sync.Mutex
+	readerOnce     sync.Once
+	pending        map[uint32]sftpPending
+	failure        error
+	ext            map[string]string
+	closeOnce      sync.Once
+	abortOnce      sync.Once
+	timeout        time.Duration
 }
 
 func sshArgs(h Host) []string {
@@ -135,6 +151,8 @@ func connectSFTPContext(ctx context.Context, h Host) (*SFTP, error) {
 }
 func (s *SFTP) Abort() {
 	s.abortOnce.Do(func() {
+		s.stopExternal()
+		s.fail(io.ErrClosedPipe)
 		if s.cmd != nil && s.cmd.Process != nil {
 			s.cmd.Process.Kill()
 		}
@@ -143,6 +161,7 @@ func (s *SFTP) Abort() {
 }
 func (s *SFTP) Close() {
 	s.closeOnce.Do(func() {
+		s.stopExternal()
 		s.in.Close()
 		if s.cmd != nil {
 			timer := time.AfterFunc(time.Second, s.Abort)
@@ -155,12 +174,33 @@ func u32(n uint32) []byte           { b := make([]byte, 4); binary.BigEndian.Put
 func u64(n uint64) []byte           { b := make([]byte, 8); binary.BigEndian.PutUint64(b, n); return b }
 func str(s string) []byte           { return append(u32(uint32(len(s))), []byte(s)...) }
 func fields(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
-func (s *SFTP) packet(t byte, p []byte) error {
-	b := fields(u32(uint32(len(p)+1)), []byte{t}, p)
+
+// Reuse the encoded packet: one payload copy and one write per request.
+var packetBuffers = sync.Pool{New: func() any { b := make([]byte, 256*1024+1024); return &b }}
+
+func (s *SFTP) packet(t byte, parts ...[]byte) error {
+	n := 5
+	for _, p := range parts {
+		n += len(p)
+	}
+	pooled := packetBuffers.Get().(*[]byte)
+	defer packetBuffers.Put(pooled)
+	b := *pooled
+	if n > len(b) {
+		b = make([]byte, n)
+	} else {
+		b = b[:n]
+	}
+	binary.BigEndian.PutUint32(b, uint32(n-4))
+	b[4] = t
+	at := 5
+	for _, p := range parts {
+		at += copy(b[at:], p)
+	}
 	for len(b) > 0 {
-		n, e := s.in.Write(b)
-		if e != nil {
-			return e
+		n, err := s.in.Write(b)
+		if err != nil {
+			return err
 		}
 		if n == 0 {
 			return io.ErrShortWrite
@@ -181,17 +221,6 @@ func (s *SFTP) receive() (byte, []byte, error) {
 	b := make([]byte, n)
 	_, e := io.ReadFull(s.out, b)
 	return b[0], b[1:], e
-}
-func (s *SFTP) send(t byte, p []byte) (uint32, error) {
-	s.id++
-	return s.id, s.packet(t, fields(u32(s.id), p))
-}
-func (s *SFTP) reply(id uint32) (byte, []byte, error) {
-	got, t, b, e := s.replyAny()
-	if got != id && e == nil {
-		return 0, nil, errors.New("unexpected SFTP response id")
-	}
-	return t, b, e
 }
 func (s *SFTP) replyAny() (uint32, byte, []byte, error) {
 	t, b, e := s.receive()
@@ -216,23 +245,101 @@ func (s *SFTP) replyAny() (uint32, byte, []byte, error) {
 	}
 	return id, t, b, nil
 }
-func (s *SFTP) request(t byte, p []byte, want byte) ([]byte, error) {
+
+// A single reader routes replies by ID while callers share the SSH connection.
+// Buffered reply channels let it drain the SSH pipe even while a sender blocks.
+type sftpPending struct {
+	reply   chan sftpReply
+	onReply func()
+}
+
+type sftpReply struct {
+	typ  byte
+	data []byte
+	err  error
+}
+
+func (s *SFTP) fail(err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failure != nil {
+		return
+	}
+	s.failure = err
+	for id, ch := range s.pending {
+		ch.reply <- sftpReply{err: err}
+		delete(s.pending, id)
+	}
+}
+func (s *SFTP) readReplies() {
+	for {
+		id, typ, data, err := s.replyAny()
+		var status *StatusError
+		if err != nil && !errors.As(err, &status) {
+			s.fail(err)
+			s.Abort()
+			return
+		}
+		s.mu.Lock()
+		ch, ok := s.pending[id]
+		delete(s.pending, id)
+		if ok {
+			if ch.onReply != nil {
+				ch.onReply()
+			}
+			ch.reply <- sftpReply{typ, data, err}
+		}
+		s.mu.Unlock()
+		if !ok {
+			s.fail(errors.New("unexpected SFTP response id"))
+			s.Abort()
+			return
+		}
+	}
+}
+func (s *SFTP) startRequest(t byte, parts ...[]byte) <-chan sftpReply {
+	return s.startActiveRequest(t, nil, parts...)
+}
+
+// Transfer deadlines track replies even while the sender is filling its window.
+// Otherwise a healthy slow upload could time out before filling 8 MiB.
+func (s *SFTP) startActiveRequest(t byte, onReply func(), parts ...[]byte) <-chan sftpReply {
+	s.readerOnce.Do(func() {
+		s.mu.Lock()
+		s.pending = make(map[uint32]sftpPending)
+		s.mu.Unlock()
+		go s.readReplies()
+	})
+	ch := make(chan sftpReply, 1)
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	s.mu.Lock()
+	if s.failure != nil {
+		ch <- sftpReply{err: s.failure}
+		s.mu.Unlock()
+		return ch
+	}
+	s.id++
+	id := s.id
+	s.pending[id] = sftpPending{ch, onReply}
+	s.mu.Unlock()
+	if err := s.packet(t, append([][]byte{u32(id)}, parts...)...); err != nil {
+		s.fail(err)
+		s.Abort()
+	}
+	return ch
+}
+func (s *SFTP) request(t byte, p []byte, want byte) ([]byte, error) {
 	timer := time.AfterFunc(s.timeout, s.Abort)
 	defer timer.Stop()
-	id, e := s.send(t, p)
-	if e != nil {
-		return nil, e
+	r := <-s.startRequest(t, p)
+	if r.err != nil {
+		return nil, r.err
 	}
-	got, b, e := s.reply(id)
-	if e != nil {
-		return nil, e
+	if r.typ != want {
+		return nil, fmt.Errorf("unexpected SFTP packet %d (wanted %d)", r.typ, want)
 	}
-	if got != want {
-		return nil, fmt.Errorf("unexpected SFTP packet %d (wanted %d)", got, want)
-	}
-	return b, nil
+	return r.data, nil
 }
 
 type decoder struct {
@@ -461,59 +568,58 @@ func (s *SFTP) Upload(f *os.File, p string, size uint64, mode uint32, progress f
 	}
 	return ce
 }
+
+const transferWindow = 64
+const transferChunk = 32768
+
+// Fill a bounded rolling window using the server-negotiated packet size.
 func (s *SFTP) uploadData(f io.Reader, h string, size uint64, progress func(uint64)) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var off uint64
-	for off < size {
-		timer := time.AfterFunc(s.timeout, s.Abort)
-		var ids []uint32
-		for n := 0; n < 16 && off < size; n++ {
-			length := uint64(32768)
-			if size-off < length {
-				length = size - off
-			}
-			b := make([]byte, length)
-			if _, e := io.ReadFull(f, b); e != nil {
-				timer.Stop()
-				s.Abort()
-				return e
-			}
-			id, e := s.send(fxWrite, fields(str(h), u64(off), str(string(b))))
-			if e != nil {
-				timer.Stop()
-				return e
-			}
-			ids = append(ids, id)
-			off += length
-		}
-		var first error
-		waiting := map[uint32]bool{}
-		for _, id := range ids {
-			waiting[id] = true
-		}
-		for range ids {
-			id, t, _, e := s.replyAny()
-			if !waiting[id] {
-				timer.Stop()
-				s.Abort()
-				return errors.New("unexpected pipelined write response")
-			}
-			delete(waiting, id)
-			if e == nil && t != fxStatus {
-				e = errors.New("invalid write response")
-			}
-			if e != nil && first == nil {
-				first = e
-			}
-		}
-		timer.Stop()
-		if first != nil {
-			return first
-		}
-		progress(off)
+	timer := time.AfterFunc(s.timeout, s.Abort)
+	defer timer.Stop()
+	type write struct {
+		reply  <-chan sftpReply
+		length uint64
 	}
-	return nil
+	chunk, window, err := s.transferGeometry(h, true)
+	if err != nil {
+		return err
+	}
+	pending := make([]write, 0, window)
+	var off, completed uint64
+	var first error
+	buf := make([]byte, min(uint64(chunk), size))
+	for off < size || len(pending) > 0 {
+		for first == nil && off < size && len(pending) < window {
+			n := min(uint64(len(buf)), size-off)
+			if _, err := io.ReadFull(f, buf[:n]); err != nil {
+				first = err
+				break
+			}
+			reply := s.startActiveRequest(fxWrite, func() { timer.Reset(s.timeout) }, str(h), u64(off), u32(uint32(n)), buf[:n])
+			pending = append(pending, write{reply, n})
+			off += n
+		}
+		if len(pending) == 0 {
+			break
+		}
+		w := pending[0]
+		pending = pending[1:]
+		r := <-w.reply
+		if r.err == nil && r.typ != fxStatus {
+			r.err = errors.New("invalid write response")
+		}
+		if r.err != nil && first == nil {
+			first = r.err
+		}
+		if r.err == nil {
+			completed += w.length
+			if progress != nil {
+				progress(completed)
+			}
+		}
+		timer.Reset(s.timeout)
+	}
+	return first
 }
 func (s *SFTP) Download(p string, f *os.File, size uint64, progress func(uint64)) error {
 	h, e := s.open(p, 1, 0)
@@ -528,112 +634,74 @@ func (s *SFTP) Download(p string, f *os.File, size uint64, progress func(uint64)
 	return ce
 }
 func (s *SFTP) downloadData(h string, f *os.File, size uint64, progress func(uint64)) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var off, total uint64
-	type pending struct {
-		id     uint32
+	timer := time.AfterFunc(s.timeout, s.Abort)
+	defer timer.Stop()
+	type read struct {
+		reply  <-chan sftpReply
 		off    uint64
 		length uint32
 	}
-	for off < size {
-		timer := time.AfterFunc(s.timeout, s.Abort)
-		var requests []pending
-		for n := 0; n < 16 && off < size; n++ {
-			length := uint32(32768)
-			if size-off < uint64(length) {
-				length = uint32(size - off)
-			}
-			id, e := s.send(fxRead, fields(str(h), u64(off), u32(length)))
-			if e != nil {
-				timer.Stop()
-				return e
-			}
-			requests = append(requests, pending{id, off, length})
-			off += uint64(length)
-		}
-		var first error
-		var short []pending
-		waiting := map[uint32]pending{}
-		for _, r := range requests {
-			waiting[r.id] = r
-		}
-		for range requests {
-			id, t, b, e := s.replyAny()
-			r, ok := waiting[id]
-			if !ok {
-				timer.Stop()
-				s.Abort()
-				return errors.New("unexpected pipelined read response")
-			}
-			delete(waiting, id)
-			if e != nil {
-				if first == nil {
-					first = e
-				}
-				continue
-			}
-			if t != fxData {
-				if first == nil {
-					first = errors.New("invalid read response")
-				}
-				continue
-			}
-			d := decoder{b: b}
-			chunk := d.str()
-			if d.err != nil || len(chunk) == 0 || len(chunk) > int(r.length) {
-				if first == nil {
-					first = errors.New("invalid read length; source may have changed")
-				}
-				continue
-			}
-			_, e = f.WriteAt([]byte(chunk), int64(r.off))
-			if e != nil && first == nil {
-				first = e
-			}
-			total += uint64(len(chunk))
-			if len(chunk) < int(r.length) {
-				short = append(short, pending{off: r.off + uint64(len(chunk)), length: r.length - uint32(len(chunk))})
-			}
-		}
-		for _, r := range short {
-			for r.length > 0 && first == nil {
-				id, e := s.send(fxRead, fields(str(h), u64(r.off), u32(r.length)))
-				if e != nil {
-					first = e
-					break
-				}
-				t, b, e := s.reply(id)
-				if e != nil {
-					first = e
-					break
-				}
-				if t != fxData {
-					first = errors.New("invalid short-read reply")
-					break
-				}
-				d := decoder{b: b}
-				chunk := d.str()
-				if d.err != nil || len(chunk) == 0 || len(chunk) > int(r.length) {
-					first = errors.New("source changed during download")
-					break
-				}
-				if _, e = f.WriteAt([]byte(chunk), int64(r.off)); e != nil {
-					first = e
-					break
-				}
-				r.off += uint64(len(chunk))
-				r.length -= uint32(len(chunk))
-				total += uint64(len(chunk))
-			}
-		}
-		timer.Stop()
-		if first != nil {
-			return first
-		}
-		progress(total)
+	chunk, window, err := s.transferGeometry(h, false)
+	if err != nil {
+		return err
 	}
-	return nil
+	pending := make([]read, 0, window)
+	queue := func(off uint64, n uint32) {
+		ch := s.startActiveRequest(fxRead, func() { timer.Reset(s.timeout) }, fields(str(h), u64(off), u32(n)))
+		pending = append(pending, read{ch, off, n})
+	}
+	var off, total uint64
+	var first error
+	for off < size || len(pending) > 0 {
+		for first == nil && off < size && len(pending) < window {
+			n := uint32(min(uint64(chunk), size-off))
+			queue(off, n)
+			off += uint64(n)
+		}
+		if len(pending) == 0 {
+			break
+		}
+		req := pending[0]
+		pending = pending[1:]
+		r := <-req.reply
+		if r.err == nil && r.typ != fxData {
+			r.err = errors.New("invalid read response")
+		}
+		if r.err != nil {
+			if first == nil {
+				first = r.err
+			}
+			continue
+		}
+		d := decoder{b: r.data}
+		chunk := d.take(int(d.u32()))
+		if d.err != nil || len(chunk) == 0 || len(chunk) > int(req.length) {
+			if first == nil {
+				first = errors.New("invalid read length; source may have changed")
+			}
+			continue
+		}
+		if first == nil {
+			n, err := f.WriteAt(chunk, int64(req.off))
+			if err == nil && n != len(chunk) {
+				err = io.ErrShortWrite
+			}
+			if err != nil {
+				first = err
+			} else {
+				total += uint64(n)
+				if progress != nil {
+					progress(total)
+				}
+				// Short reads are legal: refill their remainder through the same pipeline.
+				if n < int(req.length) {
+					queue(req.off+uint64(n), req.length-uint32(n))
+				}
+			}
+		}
+		timer.Reset(s.timeout)
+	}
+	return first
 }
 
 // Retain bounded connection diagnostics when leaving the alternate screen on error.

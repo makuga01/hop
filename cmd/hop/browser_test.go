@@ -67,17 +67,17 @@ func TestBrowserRenderDimensionsAndSinglePane(t *testing.T) {
 	}
 }
 func TestSelectionBoxLifecycleAndLayout(t *testing.T) {
-	b := Browser{Title: "Select files", Current: "/home/marek"}
+	b := Browser{Title: "Select files", Current: "/home/tester"}
 	m := newBrowserModel(b)
 	ansi := regexp.MustCompile("\x1b\\[[0-9;?]*[A-Za-z]")
 	render := func(w, h int) string { return ansi.ReplaceAllString(b.render(m, w, h), "") }
 	if strings.Contains(render(80, 24), "Selected ·") {
 		t.Fatal("empty selection box shown")
 	}
-	for _, p := range []string{"/home/marek/reports/notes.md", "/tmp/notes.md", "/home/marek/archive", "/home/marek/build.zip", "/home/marek/日本語.csv", "/home/marek/latest.txt"} {
+	for _, p := range []string{"/home/tester/reports/notes.md", "/tmp/notes.md", "/home/tester/archive", "/home/tester/build.zip", "/home/tester/日本語.csv", "/home/tester/latest.txt"} {
 		m.toggle(FileItem{Name: filepath.Base(p), Path: p, Regular: true, Size: 1200})
 	}
-	m.marks["/home/marek/archive"] = FileItem{Name: "archive", Path: "/home/marek/archive", Dir: true}
+	m.marks["/home/tester/archive"] = FileItem{Name: "archive", Path: "/home/tester/archive", Dir: true}
 	m.apply(browserListing{Target: "/var/log", Items: []FileItem{{Name: "server.log", Path: "/var/log/server.log", Regular: true}}})
 	for _, w := range []int{40, 80, 120} {
 		for _, h := range []int{12, 16, 18, 24, 40} {

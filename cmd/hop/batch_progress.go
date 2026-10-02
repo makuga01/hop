@@ -11,6 +11,7 @@ import (
 
 // One progress owner for the whole batch; file activities only update its state.
 type batchProgress struct {
+	console                                *activity
 	removing                               bool
 	embedded                               bool
 	lines                                  []string
@@ -95,11 +96,17 @@ func (p *batchProgress) activity(phase string, total uint64, transfer bool) *act
 }
 func (o Options) activity(phase string, total uint64, transfer bool) *activity {
 	if o.Progress != nil {
-		return o.Progress.activity(phase, total, transfer)
+		a := o.Progress.activity(phase, total, transfer)
+		a.file = o.fileProgress
+		return a
 	}
 	return startActivity(phase, total, transfer)
 }
 func (p *batchProgress) log(line string, replace bool) {
+	if p.console != nil {
+		fmt.Fprintln(os.Stderr, line)
+		return
+	}
 	if p.embedded {
 		if replace && len(p.lines) > 0 {
 			p.lines[len(p.lines)-1] = line
@@ -197,4 +204,56 @@ func (o Options) warning(message string) {
 		return
 	}
 	fmt.Fprintln(os.Stderr, message)
+}
+
+// Each concurrent file contributes a delta to the shared progress total.
+type fileProgress struct {
+	parent        *batchProgress
+	name          string
+	size, current uint64
+}
+
+func (p *batchProgress) startFile(f PlannedFile, get bool, dest string) *fileProgress {
+	name := f.Remote
+	if get {
+		name = f.Local
+	}
+	if rel, err := filepath.Rel(dest, name); err == nil {
+		name = rel
+	}
+	p.mu.Lock()
+	p.name = name
+	p.lastChange = time.Now()
+	p.mu.Unlock()
+	return &fileProgress{parent: p, name: name, size: f.Size}
+}
+func (f *fileProgress) update(n uint64) {
+	p := f.parent
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n = min(n, f.size)
+	p.current -= f.current
+	p.current += n
+	f.current = n
+	p.lastChange = time.Now()
+	if p.console != nil {
+		p.console.Update(p.completed + p.current)
+	}
+}
+func (f *fileProgress) complete(err error) {
+	p := f.parent
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.current -= f.current
+	if err != nil {
+		p.log(" × "+safeText(f.name)+" · "+safeText(err.Error()), false)
+	} else {
+		p.completed += f.size
+		p.doneFiles++
+		p.log(" ✓ "+safeText(f.name), false)
+	}
+	p.lastChange = time.Now()
+	if p.console != nil {
+		p.console.Update(p.completed + p.current)
+	}
 }
