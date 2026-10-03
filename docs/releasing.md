@@ -17,7 +17,7 @@ make dist
 `hop` executable, README, changelog, and LICENSE if present. Python is only a build/test
 dependency; installed binaries require OpenSSH and a terminal, with no Go runtime.
 
-## First GitHub release
+## GitHub releases
 
 1. Select the distribution license before publishing.
 2. Use `https://github.com/makuga01/hop.git` as `origin`, then push `main` after approval.
@@ -37,8 +37,8 @@ The publish job alone requests `contents: write`.
 
 A failed upload can leave a draft; rerunning resumes that draft. Already-published
 releases are never overwritten. For later releases update VERSION and CHANGELOG in a
-new commit, then push a new tag. Edit the release notes step to use just the new entry
-as the changelog grows.
+new commit, then push a new tag. The workflow uses the first version entry in
+CHANGELOG.md as the release notes.
 
 macOS builds are not Developer ID signed or notarized. No signing credentials are
 configured. Keep downloadable builds and checksums out of Git; Actions attaches them

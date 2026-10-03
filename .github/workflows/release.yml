@@ -42,13 +42,15 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         shell: bash
         run: |
+          awk '/^## / { if (entry) exit; entry=1 } entry { print }' CHANGELOG.md > release-notes.md
+          test -s release-notes.md
           if gh release view "$RELEASE_TAG" --json isDraft >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true || {
               echo 'This release is already published; refusing to replace its assets.'
               exit 1
             }
           else
-            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Hop $RELEASE_TAG" --notes-file CHANGELOG.md
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Hop $RELEASE_TAG" --notes-file release-notes.md
           fi
           gh release upload "$RELEASE_TAG" dist/"$(cat VERSION)"/*.tar.gz dist/"$(cat VERSION)"/SHA256SUMS --clobber
           gh release edit "$RELEASE_TAG" --draft=false
