@@ -93,9 +93,35 @@ followed; their targets are copied under the link names. Broken links, loops, an
 special files stop the preflight check. Existing destination symlinks and mismatched
 file types aren't overwritten.
 
+For faster download scans, Hop can use an existing Python 3 over noninteractive
+SSH to list the tree and check read access on the server. Only compressed metadata
+comes back; no helper is installed and no file contents are read during the scan.
+If the helper is unavailable or its output cannot be validated, Hop uses SFTP.
+Destination checks and transfer-time validation still apply.
+
 When filenames conflict, choose **Replace** for that transfer, **Options** to change
 the session's overwrite setting, or **Cancel**. Folder contents merge.
 Copies of at least 256 MiB or 200 items ask for confirmation before starting.
+
+Confirmation dialogs support arrow keys and Tab to select a button. The selected
+button is highlighted and marked with `> … <`. Enter activates that button;
+Esc cancels. Clicking a button activates that exact action.
+
+For new downloads and confirmed small-file replacements (up to 1 MiB), Hop can
+stream a batch over one SSH connection using an existing Python 3, when at least
+32 files qualify. Each file carries a
+SHA-256 checksum. New or changed files are synced to temporary local files and
+committed atomically. Existing destinations require explicit replacement
+authorization; identical file contents are compared and left
+in place without rewriting. Existing small-file SHA-256 hashes are sent first,
+so identical contents are not downloaded again. The stream uses gzip in both
+directions, including the request list. New large files use bounded buffers and
+temporary files;
+existing large files keep the delta/SFTP path. Repeated remote file identities
+can reuse an already verified local copy, with another checksum check and a
+separate destination file. The progress panel shows whether Stream or SFTP is
+active. If the helper is unavailable before streaming begins, Hop falls back to
+SFTP. An interrupted stream stops the batch; files already committed remain, as with ordinary copies.
 
 A move copies and verifies the whole selection before removing the sources. Failed
 copies leave the sources in place. Changes to the source after scanning stop removal.
@@ -110,8 +136,10 @@ hop my-server --overwrite   # Allow replacing destination files
 hop my-server --yes         # Skip large-copy confirmation (not move/delete confirmation)
 ```
 
-Transfers use one SSH/SFTP connection and copy files sequentially. Many small files
-can be slow because each requires separate SFTP requests.
+SFTP transfers overlap requests and copy multiple files concurrently. Eligible
+download batches use a separate compressed SSH stream. Uploads, existing large
+files, and servers without the helper use SFTP, with native delta reuse where
+available. No remote software installation is required.
 If a connection or transfer fails, the panels stay open with Retry and Options available.
 
 ## Faster repeat transfers
@@ -159,7 +187,7 @@ hop my-server --sort date
 hop my-server --sort name --order desc
 ```
 
-Themes: `lagoon` (default), `cobalt`, and `afterhours`.
+Themes: `lagoon` (default), `cobalt`, `afterhours`, and `black` (pure black background).
 Hop uses true color when available, with a 256-color fallback for Apple Terminal.
 Set `HOP_COLOR_MODE` to `truecolor` or `256` to override detection. `NO_COLOR` disables colors.
 

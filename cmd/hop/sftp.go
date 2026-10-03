@@ -70,6 +70,9 @@ type Entry struct {
 	Attr Attr
 }
 type SFTP struct {
+	batchCommand   func(context.Context) *exec.Cmd
+	host           Host
+	scanCommand    func(context.Context) *exec.Cmd
 	deltaHash      func(context.Context, string, uint64, uint64) ([]byte, error)
 	deltaTransfers atomic.Uint64
 	deltaReused    atomic.Uint64
@@ -119,7 +122,7 @@ func connectSFTPContext(ctx context.Context, h Host) (*SFTP, error) {
 		in.Close()
 		return nil, e
 	}
-	s := &SFTP{in: in, out: out, cmd: cmd, ext: map[string]string{}, timeout: 45 * time.Second}
+	s := &SFTP{host: h, in: in, out: out, cmd: cmd, ext: map[string]string{}, timeout: 45 * time.Second}
 	// Authentication may need a password, key passphrase, or host-key prompt.
 	timer := time.AfterFunc(2*time.Minute, s.Abort)
 	defer timer.Stop()

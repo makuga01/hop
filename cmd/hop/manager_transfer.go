@@ -9,6 +9,8 @@ import (
 )
 
 type panelTransfer struct {
+	button                      int
+	scan                        *scanProgress
 	overwrite                   bool
 	ctx                         context.Context
 	cancel                      context.CancelFunc
@@ -36,7 +38,9 @@ func (d *dualManager) beginCopy(a managerAction, results chan<- transferResult) 
 func (d *dualManager) scanCopy(results chan<- transferResult) {
 	t := d.transfer
 	t.stage = "scan"
+	t.button = 0
 	t.progress = nil
+	t.scan = newScanProgress()
 	a := t.action
 	t.ctx, t.cancel = context.WithCancel(context.Background())
 	d.transfer = t
@@ -49,7 +53,7 @@ func (d *dualManager) scanCopy(results chan<- transferResult) {
 			entries, e = planRemoval(t.ctx, s, a.files, a.side == 1)
 		}
 		if e == nil && a.kind != "delete" {
-			p, e = planBatch(s, a.files, t.destination, a.side == 1, t.overwrite)
+			p, e = planBatchObserved(s, a.files, t.destination, a.side == 1, t.overwrite, t.scan)
 		}
 		results <- transferResult{plan: p, removals: entries, err: e}
 	}()
@@ -96,6 +100,7 @@ func (d *dualManager) copyResult(r transferResult, results chan<- transferResult
 		changed := t.stage == "copy"
 		t.cancel()
 		t.stage = "error"
+		t.button = 0
 		t.message = r.err.Error()
 		var conflict *DestinationExistsError
 		if errors.As(r.err, &conflict) {
@@ -115,6 +120,7 @@ func (d *dualManager) copyResult(r transferResult, results chan<- transferResult
 		}
 		if t.action.kind == "delete" || t.action.kind == "move" || (longCopy(r.plan) && !d.options.Yes) {
 			t.stage = "confirm"
+			t.button = 0
 			return false
 		}
 		d.executeCopy(results)
@@ -139,7 +145,8 @@ func (d *dualManager) transferLines(w, n int) []string {
 	content := []string{}
 	switch t.stage {
 	case "scan":
-		content = append(content, "Scanning selection and checking destinations…", "To: "+t.destination)
+		content = append(content, t.scan.lines()...)
+		content = append(content, "To: "+t.destination)
 		if t.action.kind == "delete" {
 			content = []string{"Scanning selection for deletion…", t.rootSummary()}
 		}
@@ -171,6 +178,9 @@ func (d *dualManager) transferLines(w, n int) []string {
 			if p.removing {
 				content[len(content)-1] = fmt.Sprintf("[%s%s] %.0f%% · %d/%d entries", strings.Repeat("━", fill), strings.Repeat("·", 16-fill), percent, p.doneFiles, p.files)
 			}
+			if !p.removing {
+				content = append(content, p.rateText(time.Now()))
+			}
 			phase := p.phase
 			if p.name != "" {
 				phase += " · " + p.name
@@ -192,22 +202,30 @@ func (d *dualManager) transferLines(w, n int) []string {
 		content = append(content, "")
 	}
 	content = content[:n-2]
-	if t.stage == "conflict" {
-		content[len(content)-1] = " [ Replace ]   [ Cancel ]   [ Options ]"
+	if buttons := t.buttons(); len(buttons) > 0 {
+		labels := []string{}
+		for i, label := range buttons {
+			if i == t.button {
+				labels = append(labels, "> "+label+" <")
+			} else {
+				labels = append(labels, "[ "+label+" ]")
+			}
+		}
+		content[len(content)-1] = " " + strings.Join(labels, "   ")
 	}
-	if t.stage == "error" {
-		content[len(content)-1] = " [ Retry ]   [ Options ]   [ Dismiss ]"
-	}
-	if t.stage == "confirm" {
-		content[len(content)-1] = " [ " + fit(t.verb(), 8) + " ]   [ Cancel ]"
-	}
+
 	lines := []string{uiRule(title, w, true)}
-	for _, line := range content {
+	for i, line := range content {
 		style := uiBase
 		if t.stage == "error" {
 			style = uiError
 		}
-		lines = append(lines, uiBoxLine(" "+line, w, style))
+		rendered := uiBoxLine(" "+line, w, style)
+		if buttons := t.buttons(); len(buttons) > 0 && i == len(content)-1 {
+			label := "> " + buttons[t.button] + " <"
+			rendered = strings.Replace(rendered, label, uiPaint(label, uiSelected)+uiPaint("", uiBase), 1)
+		}
+		lines = append(lines, rendered)
 	}
 	return append(lines, uiBottom(w))
 }
@@ -231,4 +249,27 @@ func (t *panelTransfer) rootSummary() string {
 
 func (t *panelTransfer) modal() bool {
 	return t != nil && (t.busy() || t.stage == "confirm" || t.stage == "conflict")
+}
+
+func (t *panelTransfer) buttons() []string {
+	switch t.stage {
+	case "confirm":
+		return []string{t.verb(), "Cancel"}
+	case "conflict":
+		return []string{"Replace", "Cancel", "Options"}
+	case "error":
+		return []string{"Retry", "Options", "Dismiss"}
+	}
+	return nil
+}
+func (t *panelTransfer) buttonAt(x int) int {
+	start := 3
+	for i, label := range t.buttons() {
+		width := textWidth(label) + 4
+		if x >= start && x < start+width {
+			return i
+		}
+		start += width + 3
+	}
+	return -1
 }

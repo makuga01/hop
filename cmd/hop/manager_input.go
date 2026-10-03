@@ -231,35 +231,11 @@ func (d *dualManager) Run() (managerAction, error) {
 					if d.transfer != nil && (d.transfer.modal() || (d.transfer.stage == "error" && e.y == h-3)) {
 						key = ""
 						if !d.transfer.busy() && e.button == 0 && !e.release && e.y == h-3 {
-							if e.x >= 3 && e.x <= 14 {
+							if index := d.transfer.buttonAt(e.x); index >= 0 {
+								d.transfer.button = index
 								key = "enter"
 							}
-							if e.x >= 18 && e.x <= 28 {
-								key = "esc"
-							}
-							if d.transfer.stage == "conflict" {
-								if e.x >= 3 && e.x <= 13 {
-									key = "enter"
-								}
-								if e.x >= 17 && e.x <= 27 {
-									key = "esc"
-								}
-								if e.x >= 31 && e.x <= 41 {
-									key = "text:o"
-								}
-							}
-							if d.transfer.stage == "error" {
-								key = ""
-								if e.x >= 3 && e.x <= 11 {
-									key = "text:r"
-								}
-								if e.x >= 15 && e.x <= 25 {
-									key = "text:o"
-								}
-								if e.x >= 29 && e.x <= 39 {
-									key = "esc"
-								}
-							}
+
 						}
 					} else {
 						key = d.mouse(e, w, h)

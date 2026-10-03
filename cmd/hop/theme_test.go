@@ -82,7 +82,7 @@ func TestThemeOptionsAndColor(t *testing.T) {
 	}
 	t.Setenv("TERM", "xterm-256color")
 	seen := map[string]bool{}
-	for _, name := range []string{"lagoon", "cobalt", "afterhours"} {
+	for _, name := range []string{"lagoon", "cobalt", "afterhours", "black"} {
 		o, err := parseOptions([]string{"a.txt", "--theme", name})
 		if err != nil || o.Theme != name {
 			t.Fatalf("%+v %v", o, err)

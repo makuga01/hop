@@ -104,7 +104,8 @@ func (d *dualManager) filterKey(key string) bool {
 var managerCommands = [][2]string{
 	{"o / Options button", "Session and SSH settings"},
 	{"r (after an error)", "Retry the same operation"},
-	{"Enter (conflict)", "Replace existing files for this batch"},
+	{"←/→ · Tab (dialog)", "Choose an action; highlighted button is selected"},
+	{"Enter / Esc (dialog)", "Activate selected action / cancel"},
 	{"/ · click Filter", "Focus filter; type to match names"},
 	{"Esc / Enter (filter)", "Leave filter; keep matching files"},
 	{"Esc (normal mode)", "Deselect all; then clear filter/status"},

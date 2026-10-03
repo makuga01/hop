@@ -6,7 +6,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
 )
 
 type DestinationExistsError struct{ Path string }
@@ -25,6 +24,7 @@ type PlannedDirectory struct {
 	Mode          uint32
 }
 type CopyPlan struct {
+	remoteReadChecked      bool
 	Directories            []PlannedDirectory
 	Roots                  []FileItem
 	Files                  []PlannedFile
@@ -71,8 +71,21 @@ func localSources(args []string, sorting ...SortOrder) ([]FileItem, error) {
 
 // Enumerate and validate the entire tree before creating any destination.
 func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (CopyPlan, error) {
+	return planBatchObserved(s, files, dest, get, overwrite, nil)
+}
+func planBatchObserved(s *SFTP, files []FileItem, dest string, get, overwrite bool, scan *scanProgress) (CopyPlan, error) {
+	scan.setPhase("Checking selection", 0)
+	p, e := planBatchInternal(s, files, dest, get, overwrite, scan)
+	phase := "Scan complete"
+	if e != nil {
+		phase = "Scan failed"
+	}
+	scan.setPhase(phase, 0)
+	return p, e
+}
+func planBatchInternal(s *SFTP, files []FileItem, dest string, get, overwrite bool, scan *scanProgress) (CopyPlan, error) {
 	p := CopyPlan{Destination: dest, Direction: "upload"}
-	workers, err := s.fileWorkers()
+	workers, err := s.planningWorkers()
 	if err != nil {
 		return p, err
 	}
@@ -163,11 +176,17 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 	for i, root := range p.Roots {
 		attrsByPath[root.Path] = rootAttrs[i]
 	}
+	directoryRoots := map[string]bool{}
+	for _, f := range p.Roots {
+		if f.Dir {
+			directoryRoots[f.Path] = true
+		}
+	}
 	roots := []FileItem{}
 	for _, f := range p.Roots {
 		nested := false
-		for _, other := range p.Roots {
-			if other.Dir && other.Path != f.Path && strings.HasPrefix(f.Path, other.Path+"/") {
+		for parent := path.Dir(f.Path); parent != path.Dir(parent); parent = path.Dir(parent) {
+			if directoryRoots[parent] {
 				nested = true
 				break
 			}
@@ -177,8 +196,37 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 		}
 	}
 	p.Roots = roots
-	destinations := map[string]bool{}
+	rootNames := map[string]bool{}
+	for _, root := range roots {
+		name := path.Base(root.Path)
+		if name == "/" || name == "." || name == ".." {
+			return p, errors.New("select a named folder, not the filesystem root")
+		}
+		if rootNames[name] {
+			return p, fmt.Errorf("two marked items are named %s; unmark one to avoid a destination collision", safeText(name))
+		}
+		rootNames[name] = true
+	}
+	scan.setPhase("Discovering files and folders", 0)
+	var remoteScan remoteTreeScan
+	if get {
+		var err error
+		remoteScan, err = s.scanWithHelper(roots, attrsByPath, scan)
+		if err != nil {
+			if scan != nil {
+				scan.mu.Lock()
+				scan.files = 0
+				scan.dirs = 0
+				scan.mu.Unlock()
+			}
+			remoteScan, err = scanRemoteTree(s, roots, attrsByPath, workers, scan)
+		}
+		if err != nil {
+			return p, err
+		}
+	}
 	ancestors := map[string]bool{}
+	missingDirectories := map[string]bool{}
 	var walk func(string, string, int, *Attr) error
 	walk = func(src, rel string, depth int, known *Attr) error {
 		if depth > 128 || len(p.Files)+len(p.Directories) >= 100000 {
@@ -186,7 +234,9 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 		}
 		var a Attr
 		var e error
-		if known != nil && known.Flags&5 == 5 && (known.Regular() || known.Dir()) {
+		if cached, ok := remoteScan.attrs[src]; get && ok {
+			a = cached
+		} else if known != nil && known.Flags&5 == 5 && (known.Regular() || known.Dir()) {
 			a = *known
 		} else {
 			a, e = sourceStat(src)
@@ -196,6 +246,9 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 		}
 		if !a.Dir() && !a.Regular() {
 			return fmt.Errorf("%s is a special file; these are not supported in recursive copies (nothing copied)", safeText(src))
+		}
+		if !get {
+			scan.found(a.Dir())
 		}
 		local, remote := src, path.Join(dest, rel)
 		if get {
@@ -216,7 +269,7 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 				} else if !os.IsNotExist(err) {
 					return err
 				}
-			} else {
+			} else if !missingDirectories[path.Dir(remote)] {
 				var err error
 				old, err = s.Stat(remote, false)
 				if err == nil {
@@ -225,9 +278,12 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 					return err
 				}
 			}
+			if !get && !exists {
+				missingDirectories[remote] = true
+			}
 			var real string
 			if get {
-				real, e = s.Realpath(src)
+				real = remoteScan.dirs[src].real
 			} else {
 				real, e = filepath.EvalSymlinks(src)
 			}
@@ -244,12 +300,9 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 			}
 			p.Directories = append(p.Directories, PlannedDirectory{Local: local, Remote: remote, Mode: a.Mode & 0777})
 			if get {
-				children, err := s.ReadDir(src)
-				if err != nil {
-					return fmt.Errorf("cannot read directory %s: %w (nothing copied)", safeText(src), err)
-				}
+				children := remoteScan.dirs[src].children
 				for _, child := range children {
-					if err = walk(path.Join(src, child.Name), path.Join(rel, child.Name), depth+1, &child.Attr); err != nil {
+					if err := walk(path.Join(src, child.Name), path.Join(rel, child.Name), depth+1, &child.Attr); err != nil {
 						return err
 					}
 				}
@@ -272,13 +325,6 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 	}
 	for _, root := range roots {
 		name := path.Base(root.Path)
-		if name == "/" || name == "." || name == ".." {
-			return p, errors.New("select a named folder, not the filesystem root")
-		}
-		if destinations[name] {
-			return p, fmt.Errorf("two marked items are named %s; unmark one to avoid a destination collision", safeText(name))
-		}
-		destinations[name] = true
 		attr := attrsByPath[root.Path]
 		if e := walk(root.Path, name, 0, &attr); e != nil {
 			return p, e
@@ -287,6 +333,8 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 	if len(p.Files)+len(p.Directories) == 0 {
 		return p, errors.New("no files or directories selected")
 	}
+	p.remoteReadChecked = remoteScan.readChecked
+	scan.setPhase("Checking destinations and read access", len(p.Files))
 	// Independent file checks overlap their network round trips. Directory checks
 	// above remain ordered so a symlink cannot substitute for a destination folder.
 	if err := parallelFilesN(len(p.Files), workers, func(i int) error {
@@ -310,7 +358,7 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 			} else if !os.IsNotExist(err) {
 				return err
 			}
-		} else {
+		} else if !missingDirectories[path.Dir(remote)] {
 			var err error
 			old, err = s.Stat(remote, false)
 			if err == nil {
@@ -328,7 +376,7 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 		if exists && !get && s.ext["posix-rename@openssh.com"] != "1" {
 			return errors.New("server lacks atomic overwrite support")
 		}
-		if get {
+		if get && !remoteScan.readChecked {
 			h, err := s.open(remote, 1, 0)
 			if err != nil {
 				return fmt.Errorf("cannot read %s: %w", safeText(remote), err)
@@ -336,7 +384,7 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 			if err = s.closeHandle(h); err != nil {
 				return err
 			}
-		} else {
+		} else if !get {
 			f, err := os.Open(local)
 			if err != nil {
 				return err
@@ -345,6 +393,7 @@ func planBatch(s *SFTP, files []FileItem, dest string, get, overwrite bool) (Cop
 		}
 
 		f.Replace = exists
+		scan.checkedFile()
 		return nil
 	}); err != nil {
 		return p, err
@@ -362,7 +411,11 @@ func copyBatch(s *SFTP, h Host, files []FileItem, dest string, get bool, o Optio
 		}
 		dest = expandRemote(dest, home)
 	}
-	plan, e := planBatch(s, files, dest, get, o.Overwrite)
+	scan := newScanProgress()
+	busy.mu.Lock()
+	busy.scan = scan
+	busy.mu.Unlock()
+	plan, e := planBatchObserved(s, files, dest, get, o.Overwrite, scan)
 	busy.Stop()
 	if e != nil {
 		return e
@@ -406,40 +459,22 @@ func executeBatchPlan(s *SFTP, h Host, plan CopyPlan, get bool, o Options, progr
 	o.Yes = true
 	o.SkipReview = true
 	o.Progress = progress
-	created := []PlannedDirectory{}
-	dirStatus := o.activity("Creating destination folders", 0, false)
-	for _, d := range plan.Directories {
-		made, err := ensureDirectory(s, d, get)
-		if err != nil {
-			dirStatus.Stop()
-			return fmt.Errorf("could not prepare destination folders; created folders may remain: %w", err)
-		}
-		if made {
-			created = append(created, d)
-			name := d.Remote
-			if get {
-				name = d.Local
-			}
-			progress.folder(name)
-		}
-	}
+	dirStatus := o.activity("Preparing folders", 0, false)
+	created, err := prepareDirectories(s, plan.Directories, get, dirStatus, progress)
 	dirStatus.Stop()
+	if err != nil {
+		return fmt.Errorf("could not prepare destination folders; created folders may remain: %w", err)
+	}
+
 	if e = copyPlannedFiles(s, h, plan, get, o, progress); e != nil {
 		return e
 	}
 	finish := o.activity("Finishing folder permissions", 0, false)
-	for i := len(created) - 1; i >= 0; i-- {
-		d := created[i]
-		if get {
-			e = os.Chmod(d.Local, os.FileMode(d.Mode))
-		} else {
-			e = s.Chmod(d.Remote, d.Mode)
-		}
-		if e != nil {
-			finish.Stop()
-			return fmt.Errorf("files copied, but could not set directory permissions: %w", e)
-		}
+	if e = finishDirectories(s, created, get, finish); e != nil {
+		finish.Stop()
+		return fmt.Errorf("files copied, but could not set directory permissions: %w", e)
 	}
+
 	finish.Stop()
 	progress.finish()
 	if progress == nil || !progress.embedded {

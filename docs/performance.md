@@ -276,7 +276,6 @@ remote `/tmp/hop-benchmark.*` directory. `HOP_TRANSFER_BACKEND=sftp` forces the
 full-transfer baseline. Rsync remains an explicit-only experimental backend
 under `HOP_TRANSFER_BACKEND=rsync`.
 
-
 ## Rolling native delta validation (2026-10-02)
 
 ## What changed
@@ -391,3 +390,128 @@ fixture generation/reset and the independent final checksum are outside timing.
 
 Use the commands above to generate raw results. Benchmark logs and local source
 manifests are intentionally not checked into the repository.
+
+## Download scan optimization
+
+A read-only scan of the same remote tree produced 23,540 planned files and
+1,860 directories, including copies reached through directory symlinks.
+No source contents were downloaded for this measurement.
+
+| Implementation | Planning time |
+| --- | ---: |
+| Concurrent SFTP scan and per-file open/close checks (earlier run) | 32.074 s |
+| Server-side scan, uncompressed metadata (one run) | 7.236 s |
+| Server-side scan, gzip metadata (three subsequent runs) | 1.051 / 1.093 / 1.088 s |
+
+The median of the last three runs is 1.088 s, about 29× faster than the earlier
+SFTP measurement. These are sequential runs on one host, not a cold-cache or
+cross-platform benchmark. Times cover planning, with the SFTP connection already
+established; the helper's additional SSH connection is included.
+
+An ephemeral Python 3 command follows the same selected trees, rejects cycles
+and special files, and opens regular files read-only to check access. It sends
+bounded, compressed metadata with byte-safe paths. Hop validates tree structure,
+root metadata, and canonical directory roots before accepting it. Local destination
+checks remain in place. Failed or unavailable helpers fall back to SFTP. These
+measurements cover planning only; download streaming is measured separately below.
+
+### Mapping repeated directory trees
+
+The scan now reuses directory listings and `DirEntry` metadata within a
+single scan, including when several symlinks lead to the same tree. It derives
+canonical paths for ordinary child directories from their parent and only resolves
+roots and symlinks. Read-access checks are reused for identical file identities
+(device, inode, mode, size, modification time and change time). Logical copies
+through different aliases remain separate in the copy plan. Nothing is cached
+between scans.
+
+Metadata records now carry a parent index and basename instead of repeating the
+full path. The decoder rejects invalid parent references and path traversal.
+Three further planning runs on the same tree took **0.810 / 0.811 / 0.774 s**,
+compared with the previous median of 1.088 s: about **26% less planning time**.
+The source counts remained 23,540 files and 1,860 directories. These sequential
+measurements include the helper SSH connection but exclude initial SFTP setup.
+
+## Small-file download stream
+
+On one remote host, a generated fixture of 512 files of 18 KiB plus one 2.25 MiB
+file (513 files, 11.25 MiB total) took **18.968 s** with SFTP and **5.903 s** with
+the small-file stream: about **3.2× faster**. Both runs used the corrected SFTP
+scheduler, which limits large-file concurrency separately instead of limiting
+the entire mixed batch to eight workers. Every downloaded byte was checked
+against the generated fixture; the remote temporary directory was removed.
+
+This is a single sequential comparison on compressible synthetic data, not a
+measurement of a typical project. Timing excludes planning and connection setup.
+The version measured here streamed new files up to 1 MiB with eight local commit
+workers, per-file SHA-256 verification, fsync and atomic no-clobber commits. It
+used SFTP/native delta for larger and existing files. Subsequent changes below
+extend streaming to new large files and confirmed small-file replacements.
+Reproduce on an authorized test host with `HOP_SMALL_HOST` and
+`go test ./cmd/hop -run '^TestLiveSmallBatch$' -v -count=1`.
+
+### Replacing existing small files
+
+The initial stream skipped every existing destination, so a repeated download
+with Replace still used per-file SFTP operations. The stream now includes
+explicitly authorized replacements up to 1 MiB. Exact content comparisons avoid
+rewriting identical local files; changed files are synced before atomic rename.
+Symlink destinations and unexpected destination changes are rejected.
+
+A mixed fixture (one third identical, one third changed, one third absent among
+512 small files, plus one new 2.25 MiB file) took **18.153 s over SFTP** and
+**5.657 s with streaming**. All downloaded contents were verified. Separate
+local-only measurements for 512 files with eight commit workers were **2.007 s
+fresh**, **2.211 s changed**, and **0.012 s identical**. Thus per-file disk syncs
+remain a real cost; unchanged files avoid them when permissions also match.
+These are single runs on synthetic, compressible data, not a guarantee for
+another workload or filesystem. Use `HOP_SMALL_REPLACE=1` with the live test to
+exercise this case. `HOP_SMALL_COUNT` controls the small-file count, and
+`HOP_SMALL_BACKEND=native` selects just the streaming run.
+
+A subsequent streaming Replace run with 10,000 small files and the same large
+file (10,001 files, 178.03 MiB) completed in **46.943 s**. The small files were
+again split between identical, changed and absent local destinations. Every
+result was compared with generated contents and the remote fixture was removed.
+
+### Full-tree diagnostics and streaming large files
+
+A later opt-in test copied a real authorized tree with **23,541 files**, **1,860
+directories**, and **395,626,591 bytes (377.3 MiB)** into a unique temporary
+folder on the requested local filesystem. The completed run took **182.262 s**
+for copying, plus **0.9 s** for planning. Temporary test data was removed. This
+is one completed run on that connection and filesystem, not a universal rate.
+Previous attempts before these changes failed; their partial durations are not
+valid completed-transfer baselines. Early UI ETAs of 11–14 minutes were estimates,
+not measured completion times.
+
+The changes compress the request manifest as well as file data, stream new large
+files through bounded buffers into temporary files, and reuse verified local
+copies when multiple selected paths refer to the same remote inode/metadata.
+Reference copies receive another checksum check and remain independent local
+files, not hardlinks. Existing large files retain the native delta path.
+
+The old “Creating destination folders” phase incorrectly remained visible during
+request transmission and copying. Preparation now reports actual completed/total
+folder counts and resets the phase before copying. Folder creation and final
+permissions run concurrently within each tree level, preserving parent/child
+ordering and rejecting destination symlinks.
+
+### Resuming the same destination
+
+Small replacement candidates now send local SHA-256 signatures in the compressed
+request. If the remote content matches, the server sends a verified reference
+instead of another payload. Hop rechecks the local content before marking it
+complete, including permission handling. Modified or missing candidates still
+receive the verified file data.
+
+A separate diagnostic copy of the actual partial destination contained **662
+files / 10,584,092 bytes**. Replacing just those existing files took **0.922 s**
+after **0.831 s** of planning; payloads for identical files were not retransmitted.
+The original destination was not modified and the diagnostic copy was removed.
+
+An independent 4 MiB random-data SSH probe on that connection measured **0.754
+MB/s** with one stream and **0.741 MB/s** with four concurrent streams, including
+connection overhead. This is observed throughput for those probes, not a fixed
+network limit. Compression and reuse improve effective throughput, but short-term
+rates vary substantially across this tree; early ETAs are not reliable benchmarks.

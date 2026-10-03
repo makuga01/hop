@@ -50,10 +50,10 @@ try:
  os.write(master,b'/alpha\x1b ');wait('1 marked')
  os.write(master,b' ');wait('0 marked')
  os.write(master,b' ');wait('1 marked')
- os.write(master,b'c');wait('Scanning selection');wait('Copy complete')
+ os.write(master,b'c');wait('Copy · LOCAL → REMOTE');wait('Copy complete')
  ready()
  os.write(master,b'\t/remote\x1b ');wait('1 marked')
- os.write(master,b'c');wait('Scanning selection');wait('Copy complete')
+ os.write(master,b'c');wait('Copy · REMOTE → LOCAL');wait('Copy complete')
  ready()
  os.write(master,b'\t/\x15discard\x1bdd');wait('Permanently delete')
  os.write(master,b'\x1b');wait('Delete cancelled')
@@ -77,9 +77,10 @@ try:
  end=time.monotonic()+2
  while time.monotonic()<end and select.select([master],[],[],.1)[0]:
   if not drain():break
+ assert b'MB/s effective' in data and b'ETA' in data, 'missing transfer rate or ETA'
  assert b'Review copy' not in data and b'[Y/n' not in data,'copy escaped the panels'
  for frame in bytes(data).split(b'\x1b[H'):
-  if b'Scanning selection' in frame or b'Copy complete' in frame or b'this may take a while' in frame:
+  if b'folders found' in frame or b'Copy complete' in frame or b'this may take a while' in frame:
    assert b'REMOTE' in frame and b'LOCAL' in frame,'transfer hid a pane'
  assert termios.tcgetattr(master)==initial,'terminal left raw'
  assert data.count(b'\x1b[?1049h')==1,'fullscreen restarted between panels/transfers'

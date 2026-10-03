@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -154,7 +153,7 @@ func (d *dualManager) settingsKey(key string, w, h int) (managerAction, bool) {
 		case 3:
 			d.options.NoHistory = !d.options.NoHistory
 		case 4:
-			names := []string{"lagoon", "cobalt", "afterhours"}
+			names := []string{"lagoon", "cobalt", "afterhours", "black"}
 			for i, name := range names {
 				if activeTheme == name {
 					_ = applyTheme(names[(i+1)%len(names)])
@@ -214,31 +213,55 @@ func (d *dualManager) transferInput(key string, results chan<- transferResult) b
 	if t == nil {
 		return false
 	}
-	if t.stage == "conflict" && key != "quit" {
+	if buttons := t.buttons(); len(buttons) > 0 && key != "quit" {
 		switch key {
+		case "left", "up":
+			t.button = (t.button + len(buttons) - 1) % len(buttons)
+			return true
+		case "right", "down", "panel", "tab":
+			t.button = (t.button + 1) % len(buttons)
+			return true
 		case "enter":
-			d.retryCopy(results, true)
-		case "esc":
-			t.cancel()
-			d.transfer = nil
-			d.notice = "Operation cancelled"
-		case "text:o":
-			d.openSettings()
+			switch buttons[t.button] {
+			case "Cancel", "Dismiss":
+				key = "esc"
+			case "Options":
+				key = "text:o"
+			case "Retry":
+				key = "text:r"
+			case "Replace":
+				d.retryCopy(results, true)
+				return true
+			default:
+				d.executeCopy(results)
+				return true
+			}
 		}
-		return true
-	}
-	if t.stage == "error" {
 		switch key {
-		case "text:r":
-			d.retryCopy(results, false)
+		case "esc":
+			if t.cancel != nil {
+				t.cancel()
+			}
+			d.notice = t.verb() + " cancelled"
+			if t.stage == "conflict" {
+				d.notice = "Operation cancelled"
+			}
+			d.transfer = nil
 			return true
 		case "text:o":
 			d.openSettings()
 			return true
+		case "text:r":
+			if t.stage == "error" {
+				d.retryCopy(results, false)
+			}
+			return true
 		}
+		return t.modal()
 	}
+
 	return false
 }
 func (t *panelTransfer) conflictFooter() string {
-	return fmt.Sprintf("Enter Replace for this %s   o Options   Esc Cancel", strings.ToLower(t.verb()))
+	return "←/→ Choose   Enter Activate   Esc Cancel"
 }

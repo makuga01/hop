@@ -22,6 +22,8 @@ func styled(s, style string, color bool) string {
 // A heartbeat runs independently of SFTP replies, including OPEN, CLOSE and
 // RENAME. Silence from a server never looks like an unacknowledged confirmation.
 type activity struct {
+	meter             transferMeter
+	scan              *scanProgress
 	file              *fileProgress
 	mu                sync.Mutex
 	parent            *batchProgress
@@ -68,6 +70,10 @@ func newActivity(out io.Writer, live, color bool, phase string, total uint64, tr
 }
 func (a *activity) text(now time.Time, frame int) string {
 	frames := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+	if a.scan != nil {
+		lines := a.scan.lines()
+		return frames[frame%len(frames)] + " " + lines[0] + " · " + lines[1]
+	}
 	msg := frames[frame%len(frames)] + " " + a.phase
 	if a.transfer {
 		percent := float64(0)
@@ -75,6 +81,7 @@ func (a *activity) text(now time.Time, frame int) string {
 			percent = 100 * float64(a.bytes) / float64(a.total)
 		}
 		msg += fmt.Sprintf(" · %.0f%% · %s / %s", percent, humanSize(a.bytes), humanSize(a.total))
+		msg += " · " + a.meter.text(now, a.start, a.bytes, a.total, 0, 0, false)
 	}
 	msg += fmt.Sprintf(" · %ds", int(now.Sub(a.start).Seconds()))
 	if now.Sub(a.lastChange) >= 3*time.Second {

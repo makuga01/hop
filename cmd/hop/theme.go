@@ -12,6 +12,7 @@ type palette struct {
 }
 
 var themes = map[string]palette{
+	"black":      {0x000000, 0x000000, 0x666666, 0xeeeeee, 0xaaaaaa, 0x87cefa, 0xe6e6e6, 0x000000, 0x8bd5ff, 0xffd787},
 	"lagoon":     {0x063537, 0x104548, 0x4e9896, 0xe7fff5, 0xa3d2c8, 0xffa888, 0x9aefd3, 0x073b36, 0xa5f0cd, 0xffdc93},
 	"cobalt":     {0x10164b, 0x1c2463, 0x6675d4, 0xf1f3ff, 0xafbae8, 0xecf76c, 0x3c51d1, 0xffffff, 0x86e4ff, 0xecf76c},
 	"afterhours": {0x291632, 0x3b2146, 0xa473ae, 0xfff1fb, 0xd7b6dc, 0xffb080, 0xab386e, 0xffffff, 0xd3b5ff, 0xffdd87},
@@ -26,7 +27,7 @@ func init() { _ = applyTheme("lagoon") }
 func themeName(name string) (string, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	if _, ok := themes[name]; !ok {
-		return "", fmt.Errorf("unknown theme %q; choose lagoon, cobalt, or afterhours", name)
+		return "", fmt.Errorf("unknown theme %q; choose lagoon, cobalt, afterhours, or black", name)
 	}
 	return name, nil
 }

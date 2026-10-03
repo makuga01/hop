@@ -25,7 +25,7 @@ const help = `Hop — SSH-only, two-panel file transfer.
   hop my-server --to ~/Projects --path /srv/app
   hop demo                    Try both panels offline; copying is disabled
   hop hosts                   List discovered machines
-  hop config theme lagoon     Save lagoon, cobalt, or afterhours
+  hop config theme lagoon     Save lagoon, cobalt, afterhours, or black
   hop doctor                  Check local setup
 
 Options:

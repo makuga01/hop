@@ -11,6 +11,8 @@ import (
 
 // One progress owner for the whole batch; file activities only update its state.
 type batchProgress struct {
+	backend                                string
+	meter                                  transferMeter
 	console                                *activity
 	removing                               bool
 	embedded                               bool
@@ -79,6 +81,9 @@ func (p *batchProgress) render() {
 	stats := fmt.Sprintf("%d/%d files · %s", p.doneFiles, p.files, bytes)
 	stats = fit(stats, max(0, width-8)) + fmt.Sprintf("   %02d:%02d", elapsed/60, elapsed%60)
 	phase := p.phase
+	if !p.removing {
+		phase = p.rateText(time.Now()) + " · " + phase
+	}
 	if !p.finished && time.Since(p.lastChange) >= 3*time.Second {
 		phase += " · waiting…"
 	}
@@ -175,6 +180,7 @@ func (p *batchProgress) folder(name string) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.lastChange = time.Now()
 	p.log(" + "+safeText(name)+"/", false)
 }
 func (p *batchProgress) finish() {
@@ -255,5 +261,16 @@ func (f *fileProgress) complete(err error) {
 	p.lastChange = time.Now()
 	if p.console != nil {
 		p.console.Update(p.completed + p.current)
+	}
+}
+
+func (p *batchProgress) setBackend(name string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.backend = name
+	p.phase = "Copying files"
+	p.lastChange = time.Now()
+	if p.console != nil {
+		p.console.Phase("Copying files · " + name)
 	}
 }

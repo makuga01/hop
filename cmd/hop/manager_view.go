@@ -98,7 +98,7 @@ func (d *dualManager) paneLines(side, w, rows int) []string {
 				mark = "*"
 			}
 			if i == cursor {
-				if d.active == side && !d.filtering[side] && !m.editing {
+				if d.active == side && !d.filtering[side] && !m.editing && (d.transfer == nil || len(d.transfer.buttons()) == 0) {
 					style = uiSelected
 				} else {
 					style = uiPanel
@@ -217,10 +217,10 @@ func (d *dualManager) render(w, h int) string {
 			footer = d.transfer.conflictFooter()
 		}
 		if d.transfer.stage == "error" {
-			footer = "r Retry   o Options   Esc Dismiss"
+			footer = "←/→ Choose   Enter Activate   Esc Dismiss"
 		}
 		if d.transfer.stage == "confirm" {
-			footer = "Enter " + d.transfer.verb() + " now   Esc Cancel"
+			footer = "←/→ Choose   Enter Activate   Esc Cancel"
 		}
 	}
 	if d.filtering[d.active] {

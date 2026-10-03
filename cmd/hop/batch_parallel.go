@@ -54,6 +54,7 @@ func copyPlannedFiles(s *SFTP, h Host, plan CopyPlan, get bool, o Options, p *ba
 		p.console = startActivity("Copying files", plan.Total, true)
 		defer p.console.Stop()
 	}
+	p.setBackend("SFTP")
 	o.Progress = p
 	o.deferHistory = true
 	completed := make([]bool, len(plan.Files))
@@ -61,17 +62,31 @@ func copyPlannedFiles(s *SFTP, h Host, plan CopyPlan, get bool, o Options, p *ba
 	if err != nil {
 		return err
 	}
-	// Avoid giving dozens of large files their own multi-MiB transfer window.
-	for _, f := range plan.Files {
-		if f.Size > 1<<20 {
-			workers = min(workers, batchWorkers)
-			break
-		}
-	}
+	// Limit large-file windows independently of the small-file queue.
+	largeSlots := make(chan struct{}, batchWorkers)
 	handled, err := tryRsyncBatch(s, h, plan, get, o, p, completed)
-	if !handled {
+	if handled {
+		p.setBackend("rsync")
+	}
+	if !handled && get {
+		err = streamDownloads(s, plan, o, p, completed)
+	}
+	if !handled && err == nil {
+		for _, done := range completed {
+			if !done {
+				p.setBackend("SFTP")
+				break
+			}
+		}
 		err = parallelFilesN(len(plan.Files), workers, func(i int) error {
+			if completed[i] {
+				return nil
+			}
 			f := plan.Files[i]
+			if f.Size > 1<<20 {
+				largeSlots <- struct{}{}
+				defer func() { <-largeSlots }()
+			}
 			options := o
 			options.exactDestination = true
 			options.fileProgress = p.startFile(f, get, plan.Destination)

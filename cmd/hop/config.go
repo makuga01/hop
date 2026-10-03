@@ -37,7 +37,7 @@ func configuredTheme(values map[string]json.RawMessage) (string, error) {
 	name := "lagoon"
 	if raw, ok := values["theme"]; ok {
 		if string(raw) == "null" || json.Unmarshal(raw, &name) != nil {
-			return "", errors.New("config theme must be a string: lagoon, cobalt, or afterhours")
+			return "", errors.New("config theme must be a string: lagoon, cobalt, afterhours, or black")
 		}
 	}
 	return themeName(name)
@@ -61,7 +61,7 @@ func loadTheme(override string) error {
 
 func configure(args []string) error {
 	if len(args) < 1 || len(args) > 2 || args[0] != "theme" {
-		return errors.New("usage: hop config theme [lagoon|cobalt|afterhours]")
+		return errors.New("usage: hop config theme [lagoon|cobalt|afterhours|black]")
 	}
 	values, file, err := readConfig()
 	if err != nil {
