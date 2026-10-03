@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-const mouseOn = "\x1b[?1002h\x1b[?1006h"
-const mouseOff = "\x1b[?1002l\x1b[?1006l"
+const mouseOn = "\x1b[?1000h\x1b[?1002h\x1b[?1006h"
+const mouseOff = "\x1b[?1002l\x1b[?1000l\x1b[?1006l"
 
 type mouseEvent struct {
 	button, x, y int

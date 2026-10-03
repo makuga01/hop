@@ -66,7 +66,7 @@ func TestConflictChoiceBothDirections(t *testing.T) {
 	}
 }
 func TestSessionOptions(t *testing.T) {
-	theme := activeTheme
+	theme := themePreference
 	defer applyTheme(theme)
 	d := managerFixture()
 	d.openSettings()
@@ -74,7 +74,7 @@ func TestSessionOptions(t *testing.T) {
 		d.settingsCursor = i
 		d.settingsKey("enter", 110, 28)
 	}
-	if !d.options.Overwrite || !d.options.DryRun || !d.readonly || !d.options.Yes || !d.options.NoHistory || activeTheme == theme {
+	if !d.options.Overwrite || !d.options.DryRun || !d.readonly || !d.options.Yes || !d.options.NoHistory || themePreference == theme {
 		t.Fatal("session options did not apply")
 	}
 	d.settingsCursor = 8

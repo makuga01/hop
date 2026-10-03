@@ -67,9 +67,9 @@ STEPS = [
     (16.5, b"\r", "Open the remote exports folder", "Enter"),
     (18, b"o", "Change settings without leaving Hop", "o"),
     (19, b"jjjj", "Choose a color theme", "j"),
-    (20, b"\r", "Cobalt theme", "Enter"),
-    (22, b"\r", "Afterhours theme", "Enter"),
-    (24, b"\r", "Back to Lagoon", "Enter"),
+    (20, b"", "Dark theme selected", ""),
+    (22, b"", "Session settings", ""),
+    (24, b"", "Dark theme", ""),
     (25, b"\x1b", "Return to the two-panel workspace", "Esc"),
     (26, b"\t", "Ready for the next operation", "Tab"),
 ]
@@ -88,7 +88,7 @@ def capture(binary, output, container=None):
         }
         master, slave = os.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
-        command = [str(binary), "demo", "--theme", "lagoon", "--no-history"]
+        command = [str(binary), "demo", "--theme", "dark", "--no-history"]
         if container:
             prompt = (
                 r"\n  \[\e[38;2;137;180;250m\]~/Projects"

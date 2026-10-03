@@ -39,7 +39,7 @@ func (d *dualManager) settingsRows() [][2]string {
 	if d.panes[d.active].sortOrder.Desc {
 		direction = "Descending"
 	}
-	rows := [][2]string{{"Existing files", overwrite}, {"Preview only", toggle(d.options.DryRun)}, {"Confirm large copies", toggle(!d.options.Yes)}, {"Remote history", toggle(!d.options.NoHistory)}, {"Theme", activeTheme}, {"Active panel sort", d.panes[d.active].sortOrder.Field}, {"Sort direction", direction}}
+	rows := [][2]string{{"Existing files", overwrite}, {"Preview only", toggle(d.options.DryRun)}, {"Confirm large copies", toggle(!d.options.Yes)}, {"Remote history", toggle(!d.options.NoHistory)}, {"Theme", themeLabel()}, {"Active panel sort", d.panes[d.active].sortOrder.Field}, {"Sort direction", direction}}
 	for i, label := range []string{"SSH destination", "SSH port", "Identity file", "Jump host", "SSH config file"} {
 		value := d.connection[i]
 		if value == "" {
@@ -153,9 +153,9 @@ func (d *dualManager) settingsKey(key string, w, h int) (managerAction, bool) {
 		case 3:
 			d.options.NoHistory = !d.options.NoHistory
 		case 4:
-			names := []string{"lagoon", "cobalt", "afterhours", "black"}
+			names := themeOrder
 			for i, name := range names {
-				if activeTheme == name {
+				if themePreference == name {
 					_ = applyTheme(names[(i+1)%len(names)])
 					break
 				}

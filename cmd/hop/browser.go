@@ -886,6 +886,22 @@ func browserKey(p []byte) (string, int) {
 		if p[1] != '[' && p[1] != 'O' {
 			return "esc", 1
 		}
+		// A terminal may keep legacy mouse encoding despite the SGR request.
+		// Its three bytes are one packet, never keyboard commands.
+		if len(p) >= 3 && string(p[:3]) == "\x1b[M" {
+			if len(p) < 6 {
+				return "", 0
+			}
+			if p[3] < 32 || p[4] <= 32 || p[5] <= 32 {
+				return "", 6
+			}
+			button := int(p[3]) - 32
+			end := "M"
+			if button&3 == 3 && button&64 == 0 {
+				end = "m"
+			}
+			return fmt.Sprintf("mouse:%d;%d;%d%s", button, int(p[4])-32, int(p[5])-32, end), 6
+		}
 		for i := 2; i < len(p); i++ {
 			if p[i] >= 0x40 && p[i] <= 0x7e {
 				seq := string(p[:i+1])

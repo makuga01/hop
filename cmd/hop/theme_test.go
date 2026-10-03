@@ -14,7 +14,10 @@ func TestThemeConfiguration(t *testing.T) {
 	if err := loadTheme(""); err != nil {
 		t.Fatal(err)
 	}
-	lagoon := uiSelected
+	if activeTheme != "dark" || themePreference != "dark" {
+		t.Fatal("default theme must be dark")
+	}
+	defaultStyle := uiSelected
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatal("reading default should not create files")
 	}
@@ -24,13 +27,13 @@ func TestThemeConfiguration(t *testing.T) {
 	if err := loadTheme(""); err != nil {
 		t.Fatal(err)
 	}
-	if uiSelected == lagoon {
+	if uiSelected == defaultStyle {
 		t.Fatal("saved theme did not apply")
 	}
-	if err := loadTheme("lagoon"); err != nil {
+	if err := loadTheme("dark"); err != nil {
 		t.Fatal(err)
 	}
-	if uiSelected != lagoon {
+	if uiSelected != rgbStyle(themes["dark"].focusInk, themes["dark"].focus) {
 		t.Fatal("override did not take precedence")
 	}
 	values, file, err := readConfig()
@@ -82,7 +85,7 @@ func TestThemeOptionsAndColor(t *testing.T) {
 	}
 	t.Setenv("TERM", "xterm-256color")
 	seen := map[string]bool{}
-	for _, name := range []string{"lagoon", "cobalt", "afterhours", "black"} {
+	for _, name := range []string{"dark", "light", "lagoon", "cobalt", "afterhours", "black"} {
 		o, err := parseOptions([]string{"a.txt", "--theme", name})
 		if err != nil || o.Theme != name {
 			t.Fatalf("%+v %v", o, err)

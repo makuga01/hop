@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — Dark and Light themes
+
+- Make the neutral Dark theme the default, with softer borders and a muted blue selection.
+- Add a matching Light theme and an optional Auto mode based on terminal or desktop appearance. Existing saved choices remain unchanged.
+- Improve text contrast and use a quieter selection in the pure Black theme.
+- Refresh the real SSH walkthrough, animated repository preview, screenshots, and offline demo in Dark, using only isolated fictional data.
+- Accept legacy mouse packets alongside SGR events and explicitly request basic mouse reporting.
+- Add `hop doctor mouse` to compare basic and drag reporting without recording typed text or connecting to a server.
+
+Mouse input in Warp remains under investigation; these changes do not claim to resolve it.
+
 ## 0.2.0 — Faster transfers and clearer controls
 
 - Download batches over a compressed SSH stream when Python 3 is already available on the server. No remote installation is needed; SFTP remains the fallback.

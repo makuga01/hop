@@ -25,8 +25,9 @@ const help = `Hop — SSH-only, two-panel file transfer.
   hop my-server --to ~/Projects --path /srv/app
   hop demo                    Try both panels offline; copying is disabled
   hop hosts                   List discovered machines
-  hop config theme lagoon     Save lagoon, cobalt, afterhours, or black
+  hop config theme dark       Save the default dark theme
   hop doctor                  Check local setup
+  hop doctor mouse            Diagnose terminal mouse input
 
 Options:
   --host HOST    --last         Choose a machine
@@ -293,6 +294,9 @@ func run(args []string) (runErr error) {
 	if e = loadTheme(o.Theme); e != nil {
 		return e
 	}
+	if command == "doctor" && len(args) == 2 && args[1] == "mouse" {
+		return diagnoseMouse()
+	}
 	if command == "demo" {
 		return demoManager(o.Sort)
 	}
@@ -320,6 +324,10 @@ func run(args []string) (runErr error) {
 			colorMode = "disabled (NO_COLOR or TERM=dumb)"
 		}
 		fmt.Printf("Theme colors: %s\n", colorMode)
+		fmt.Printf("Theme: %s\n", themeLabel())
+		if strings.Contains(strings.ToLower(os.Getenv("TERM_PROGRAM")), "warp") {
+			fmt.Println("Warp mouse: enable Mouse Reporting and Scroll Reporting in Settings > Features > Terminal")
+		}
 		fmt.Printf("State: %s\nMachines discovered: %d\nInteractive terminal: %v\n", dataDir, len(d.Hosts), ttyAvailable())
 		return nil
 	}

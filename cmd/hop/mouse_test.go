@@ -154,9 +154,13 @@ func TestMouseTerminal(t *testing.T) {
 	if e != nil {
 		t.Skip("python3 required")
 	}
-	out, e := exec.Command(python, "testdata/mouse_browser.py", os.Args[0]).CombinedOutput()
-	if e != nil {
-		t.Fatalf("mouse PTY: %v\n%s", e, out)
+	for _, encoding := range []string{"sgr", "legacy"} {
+		t.Run(encoding, func(t *testing.T) {
+			out, e := exec.Command(python, "testdata/mouse_browser.py", os.Args[0], encoding).CombinedOutput()
+			if e != nil {
+				t.Fatalf("mouse PTY: %v\n%s", e, out)
+			}
+		})
 	}
 }
 func TestMouseTerminalHelper(t *testing.T) {
@@ -192,4 +196,42 @@ func TestMouseTerminalHelper(t *testing.T) {
 		}
 	}
 	println("MOUSE_OK")
+}
+
+func TestLegacyMousePacketsRemainAtomic(t *testing.T) {
+	for _, event := range []mouseEvent{{button: 0, x: 67, y: 68}, {button: 3, x: 8, y: 9, release: true}, {button: 65, x: 20, y: 10}, {button: 32, x: 40, y: 12}} {
+		packet := []byte{27, '[', 'M', byte(event.button + 32), byte(event.x + 32), byte(event.y + 32)}
+		for split := 1; split < len(packet); split++ {
+			if _, n := managerKey(packet[:split]); n != 0 {
+				t.Fatalf("partial legacy packet consumed at %d", split)
+			}
+		}
+		key, n := managerKey(append(packet, 'q'))
+		got, ok := parseMouse(key)
+		if !ok || n != 6 || got != event {
+			t.Fatalf("legacy mouse: %+v, %q, %d", got, key, n)
+		}
+		if key, n = managerKey(append(packet, 'q')[n:]); key != "text:q" || n != 1 {
+			t.Fatal("following key lost")
+		}
+	}
+}
+
+func TestMouseDiagnosticTerminal(t *testing.T) {
+	python, e := exec.LookPath("python3")
+	if e != nil {
+		t.Skip("python3 required")
+	}
+	output, e := exec.Command(python, "testdata/mouse_diagnostic.py", os.Args[0]).CombinedOutput()
+	if e != nil {
+		t.Fatalf("diagnostic PTY: %v\n%s", e, output)
+	}
+}
+func TestMouseDiagnosticHelper(t *testing.T) {
+	if os.Getenv("HOP_DIAGNOSTIC_TEST") != "1" {
+		t.Skip("PTY helper")
+	}
+	if e := diagnoseMouse(); e != nil {
+		t.Fatal(e)
+	}
 }

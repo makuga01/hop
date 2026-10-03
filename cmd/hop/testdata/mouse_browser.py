@@ -32,13 +32,17 @@ def wait(text):
     raise AssertionError(f"Missing {text!r}\n{data.decode(errors='replace')}")
 
 def mouse(button, x, y, release=False):
-    os.write(master, f"\x1b[<{button};{x};{y}{'m' if release else 'M'}".encode())
+    if len(sys.argv) > 2 and sys.argv[2] == 'legacy':
+        os.write(master, bytes([27, 91, 77, 35 if release else button + 32, x + 32, y + 32]))
+    else:
+        os.write(master, f"\x1b[<{button};{x};{y}{'m' if release else 'M'}".encode())
 
 def click(button, x, y):
     mouse(button, x, y)
     mouse(button, x, y, True)
 
 try:
+    wait("\x1b[?1000h")
     wait("\x1b[?1006h")
     wait("file00.txt")
     click(0, 8, 9)  # left click enters folder

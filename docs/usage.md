@@ -181,13 +181,21 @@ Recent paths also use transfer history and remote shell history.
 `HOP_HOME` overrides the directory. Settings are in `config.json`; history is in `state.json`.
 
 ```sh
-hop config theme cobalt    # Save a default theme
-hop --theme afterhours     # Choose a theme for this session
+hop config theme dark      # Save the default dark theme
+hop --theme light          # Choose a theme for this session
 hop my-server --sort date
 hop my-server --sort name --order desc
 ```
 
-Themes: `lagoon` (default), `cobalt`, `afterhours`, and `black` (pure black background).
+Themes: `dark` (default), `light`, `auto`, `black` (pure black), `lagoon`, `cobalt`,
+and `afterhours`. Dark and Light use neutral surfaces with a muted blue selection.
+Options changes the theme for this session; `hop config theme NAME` saves it.
+
+Auto first uses the background advertised in `COLORFGBG`, then the macOS system
+appearance or GNOME's explicit light/dark preference. When no preference is
+available, it uses Dark. Custom terminal palettes can differ from the system:
+use `--theme light` or `--theme dark` to override the guess. Existing saved themes
+keep their settings. Detection runs at startup and does not change terminal settings.
 Hop uses true color when available, with a 256-color fallback for Apple Terminal.
 Set `HOP_COLOR_MODE` to `truecolor` or `256` to override detection. `NO_COLOR` disables colors.
 
@@ -196,6 +204,18 @@ Set `HOP_COLOR_MODE` to `truecolor` or `256` to override detection. `NO_COLOR` d
 If Hop's settings files don't exist, it reads the former Hops settings.
 `HOPS_HOME` and `HOPS_COLOR_MODE` still work; the `HOP_*` values take precedence.
 Keep a separate `HOP_HOME` if you also use the older single-panel `hop-classic`.
+
+### Mouse and scrolling in Warp
+
+In Warp, enable **Settings → Features → Terminal → Enable Mouse Reporting**, then
+**Scroll Reporting**. Without those settings, Warp keeps the events instead of
+sending them to Hop. Holding Shift also gives the mouse to Warp for text selection.
+See [Warp's full-screen app settings](https://docs.warp.dev/terminal/more-features/full-screen-apps).
+Hop supports SGR mouse events and legacy mouse packets, and disables mouse reporting
+when leaving the interface. `hop doctor` includes this reminder when run in Warp.
+If both settings are on and input still fails, run `hop doctor mouse`, click and
+scroll in the test area, then press Q. It reports event counts and protocol names
+without recording typed text, file paths, or connecting to a server.
 
 ## Development
 

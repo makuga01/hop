@@ -8,7 +8,7 @@ captions, key badges, or other graphics are added to the terminal output.
 ## Full SSH walkthrough
 
 `hop-walkthrough.mp4`, `hop-walkthrough.gif`, and `hop-walkthrough.cast` capture
-the real application from the shell prompt through a successful transfer:
+the real application in its default Dark theme, from the shell prompt through a successful transfer:
 
 1. Type `hop` and press Enter.
 2. Pick `staging-demo` (`deploy@staging.demo:2222`) from three fictional SSH aliases.
@@ -59,7 +59,7 @@ including after a failed recording.
 
 ## Offline interface demo
 
-These are recordings of the real Hop 0.1.0 terminal interface. The application
+These are recordings of the current Hop terminal interface in Dark. The application
 runs in its built-in offline demo, which supplies fictional files, paths, and
 the `server (demo)` destination. Copying and remote connections are disabled.
 

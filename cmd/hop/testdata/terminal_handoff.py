@@ -12,7 +12,7 @@ import time
 def run_once(binary):
     fd, slave = os.openpty()
     initial = termios.tcgetattr(fd)
-    env = dict(os.environ, HOP_TERMINAL_TEST="1", TERM="xterm-256color")
+    env = dict(os.environ, HOP_TERMINAL_TEST="1", TERM="xterm-256color", HOP_COLOR_MODE="truecolor")
     env.pop("NO_COLOR", None)
     child = subprocess.Popen([binary, "-test.run=^TestTerminalHandoffHelper$"], stdin=slave, stdout=slave, stderr=slave, env=env, start_new_session=True)
     os.close(slave)
@@ -60,7 +60,7 @@ def run_once(binary):
         os.write(fd, b"/tmp/a b\r")
         wait_for("TERMINAL_HANDOFF_OK")
         assert transcript.count(b"Waiting test") >= 3, "heartbeat stopped without byte updates"
-        assert b"\x1b[38;2;7;59;54;48;2;154;239;211m" in transcript, "selected row has no color"
+        assert b"\x1b[38;2;243;246;251;48;2;51;70;95m" in transcript, "selected row has no color"
         assert b"(inferred)" not in transcript, "source labels remain visible"
         restored = termios.tcgetattr(fd)
         assert restored == initial, "terminal attributes were not restored"
