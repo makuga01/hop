@@ -17,22 +17,23 @@ func TestTransferMeter(t *testing.T) {
 		}
 	}
 	check(0, 0, 0, false, "ETA —")
-	check(time.Second, 2e6, 1, false, "2.0 MB/s effective · ETA 5s")
-	check(2*time.Second, 4e6, 2, false, "ETA 4s")
-	for i := 3; i <= 9; i++ {
-		m.text(start.Add(time.Duration(i)*time.Second), start, 4e6, 12e6, 2, 6, false)
+	check(time.Second, 2e6, 1, false, "2.0 MB/s effective · ETA —")
+	check(2*time.Second, 4e6, 2, false, "ETA —")
+	check(3*time.Second, 6e6, 3, false, "ETA ~3s")
+	for i := 4; i <= 9; i++ {
+		m.text(start.Add(time.Duration(i)*time.Second), start, 6e6, 12e6, 3, 6, false)
 	}
-	check(10*time.Second, 4e6, 2, false, "0.0 MB/s effective · ETA —")
-	check(11*time.Second, 1e6, 0, false, "ETA —")   // retry resets counters
-	check(12*time.Second, 12e6, 5, false, "ETA 1s") // still committing files
+	check(10*time.Second, 6e6, 3, false, "0.0 MB/s effective · ETA —")
+	check(11*time.Second, 1e6, 0, false, "ETA —")  // retry resets counters
+	check(12*time.Second, 12e6, 5, false, "ETA —") // new sampling window after retry
 	check(13*time.Second, 12e6, 6, true, "ETA 0s")
 }
 func TestTransferMeterEmptyFilesAndFinalization(t *testing.T) {
 	start := time.Unix(100, 0)
 	var m transferMeter
 	m.text(start, start, 0, 0, 0, 10, false)
-	got := m.text(start.Add(2*time.Second), start, 0, 0, 2, 10, false)
-	if !strings.Contains(got, "ETA 8s") {
+	got := m.text(start.Add(4*time.Second), start, 0, 0, 2, 10, false)
+	if !strings.Contains(got, "ETA ~16s") {
 		t.Fatal(got)
 	}
 	var single transferMeter
@@ -44,7 +45,7 @@ func TestTransferMeterEmptyFilesAndFinalization(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		m.text(start.Add(time.Duration(i)*200*time.Millisecond), start, 0, 0, 2, 10, false)
 	}
-	if len(m.samples) > 28 {
+	if len(m.samples) > 103 {
 		t.Fatalf("unbounded samples: %d", len(m.samples))
 	}
 }
@@ -72,5 +73,46 @@ func TestScanAndTransferPanelProgress(t *testing.T) {
 		if !strings.Contains(got, "MB/s effective") || !strings.Contains(got, "ETA") {
 			t.Fatal(got)
 		}
+	}
+}
+
+func TestTransferMeterLargeFileDoesNotExtrapolateFileCount(t *testing.T) {
+	start := time.Unix(100, 0)
+	var m transferMeter
+	m.text(start, start, 0, 400e6, 0, 23541, false)
+	got := m.text(start.Add(5*time.Second), start, 50e6, 400e6, 1, 23541, false)
+	if !strings.Contains(got, "ETA ~35s") {
+		t.Fatal(got)
+	}
+	// Once all bytes arrived, don't apply the old file-count extrapolation
+	// to final commits either.
+	got = m.text(start.Add(6*time.Second), start, 400e6, 400e6, 2, 23541, false)
+	if !strings.Contains(got, "ETA —") {
+		t.Fatal(got)
+	}
+	// Tiny initial samples and a stalled stream cannot justify a huge ETA.
+	var warmup transferMeter
+	warmup.text(start, start, 0, 400e6, 0, 23541, false)
+	got = warmup.text(start.Add(5*time.Second), start, 1024, 400e6, 1, 23541, false)
+	if !strings.Contains(got, "ETA —") {
+		t.Fatal(got)
+	}
+	for i := 6; i <= 12; i++ {
+		got = m.text(start.Add(time.Duration(i)*time.Second), start, 400e6, 400e6, 2, 23541, false)
+	}
+	if !strings.Contains(got, "0.0 MB/s effective · ETA —") {
+		t.Fatal(got)
+	}
+}
+
+func TestTransferMeterBackendChange(t *testing.T) {
+	p := &batchProgress{backend: "Stream", total: 400e6, completed: 300e6, files: 100, doneFiles: 90}
+	p.meter.samples = []transferSample{{at: time.Now().Add(-10 * time.Second)}}
+	p.setBackend("Delta")
+	if len(p.meter.samples) != 1 || p.meter.samples[0].bytes != 300e6 || p.meter.samples[0].files != 90 {
+		t.Fatal("backend did not reset sample baseline")
+	}
+	if got := p.rateText(time.Now()); !strings.Contains(got, "ETA —") {
+		t.Fatal(got)
 	}
 }

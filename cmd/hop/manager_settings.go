@@ -39,7 +39,7 @@ func (d *dualManager) settingsRows() [][2]string {
 	if d.panes[d.active].sortOrder.Desc {
 		direction = "Descending"
 	}
-	rows := [][2]string{{"Existing files", overwrite}, {"Preview only", toggle(d.options.DryRun)}, {"Confirm large copies", toggle(!d.options.Yes)}, {"Remote history", toggle(!d.options.NoHistory)}, {"Theme", themeLabel()}, {"Active panel sort", d.panes[d.active].sortOrder.Field}, {"Sort direction", direction}}
+	rows := [][2]string{{"Existing files", overwrite}, {"Preview only", toggle(d.options.DryRun)}, {"Remote history", toggle(!d.options.NoHistory)}, {"Theme", themeLabel()}, {"Active panel sort", d.panes[d.active].sortOrder.Field}, {"Sort direction", direction}}
 	for i, label := range []string{"SSH destination", "SSH port", "Identity file", "Jump host", "SSH config file"} {
 		value := d.connection[i]
 		if value == "" {
@@ -90,14 +90,14 @@ func (d *dualManager) settingsKey(key string, w, h int) (managerAction, bool) {
 			d.settingsEdit = false
 		case "enter":
 			value := strings.TrimSpace(d.settingsText)
-			if d.settingsCursor == 8 && value != "" {
+			if d.settingsCursor == 7 && value != "" {
 				p, e := strconv.Atoi(value)
 				if e != nil || p < 1 || p > 65535 {
 					d.settingsError = "Port must be 1–65535, or empty for SSH default"
 					return managerAction{}, false
 				}
 			}
-			d.connection[d.settingsCursor-7] = value
+			d.connection[d.settingsCursor-6] = value
 			d.settingsEdit = false
 			d.settingsError = ""
 		case "clear":
@@ -121,9 +121,9 @@ func (d *dualManager) settingsKey(key string, w, h int) (managerAction, bool) {
 			return managerAction{}, false
 		}
 		switch e.button {
-		case 64:
+		case 63:
 			d.settingsCursor--
-		case 65:
+		case 64:
 			d.settingsCursor++
 		case 0:
 			gutter, width := contentGeometry(w)
@@ -149,10 +149,8 @@ func (d *dualManager) settingsKey(key string, w, h int) (managerAction, bool) {
 			d.options.DryRun = !d.options.DryRun
 			d.readonly = d.options.DryRun
 		case 2:
-			d.options.Yes = !d.options.Yes
-		case 3:
 			d.options.NoHistory = !d.options.NoHistory
-		case 4:
+		case 3:
 			names := themeOrder
 			for i, name := range names {
 				if themePreference == name {
@@ -160,7 +158,7 @@ func (d *dualManager) settingsKey(key string, w, h int) (managerAction, bool) {
 					break
 				}
 			}
-		case 5:
+		case 4:
 			fields := []string{"name", "date", "size", "type"}
 			m := d.panes[d.active]
 			for i, f := range fields {
@@ -169,14 +167,14 @@ func (d *dualManager) settingsKey(key string, w, h int) (managerAction, bool) {
 					break
 				}
 			}
-		case 6:
+		case 5:
 			m := d.panes[d.active]
 			m.setSort(m.sortOrder.Field)
-		case 7, 8, 9, 10, 11:
+		case 6, 7, 8, 9, 10:
 			d.settingsEdit = true
-			d.settingsText = d.connection[d.settingsCursor-7]
+			d.settingsText = d.connection[d.settingsCursor-6]
 			d.settingsError = ""
-		case 12:
+		case 11:
 			target, opts, ok := normalizeTarget(d.connection[0])
 			if !ok {
 				d.settingsError = "Enter an SSH alias or user@address"
@@ -213,6 +211,18 @@ func (d *dualManager) transferInput(key string, results chan<- transferResult) b
 	if t == nil {
 		return false
 	}
+	if t.busy() && key == "esc" {
+		if !t.stopping {
+			t.stopping = true
+			t.cancel()
+			// SFTP requests have no per-request cancellation. Closing this connection
+			// also cancels stream helpers; Run reconnects only after the worker exits.
+			if d.sftp != nil && (t.action.kind != "delete" || t.action.side == 1) {
+				d.sftp.Abort()
+			}
+		}
+		return true
+	}
 	if buttons := t.buttons(); len(buttons) > 0 && key != "quit" {
 		switch key {
 		case "left", "up":
@@ -225,6 +235,9 @@ func (d *dualManager) transferInput(key string, results chan<- transferResult) b
 			switch buttons[t.button] {
 			case "Cancel", "Dismiss":
 				key = "esc"
+			case "Details":
+				d.details, d.detailOffset = t.verb()+" stopped: "+t.message, 0
+				return true
 			case "Options":
 				key = "text:o"
 			case "Retry":
@@ -243,6 +256,9 @@ func (d *dualManager) transferInput(key string, results chan<- transferResult) b
 				t.cancel()
 			}
 			d.notice = t.verb() + " cancelled"
+			if t.stage == "error" {
+				d.notice = t.verb() + " stopped · selection kept"
+			}
 			if t.stage == "conflict" {
 				d.notice = "Operation cancelled"
 			}
@@ -252,7 +268,7 @@ func (d *dualManager) transferInput(key string, results chan<- transferResult) b
 			d.openSettings()
 			return true
 		case "text:r":
-			if t.stage == "error" {
+			if t.stage == "error" && !t.wrote {
 				d.retryCopy(results, false)
 			}
 			return true

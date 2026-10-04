@@ -227,8 +227,12 @@ func planBatchInternal(s *SFTP, files []FileItem, dest string, get, overwrite bo
 	}
 	ancestors := map[string]bool{}
 	missingDirectories := map[string]bool{}
+	deferUploadChecks := !get && s.canCheckUploadBatch()
 	var walk func(string, string, int, *Attr) error
 	walk = func(src, rel string, depth int, known *Attr) error {
+		if err := s.externalContext().Err(); err != nil {
+			return err
+		}
 		if depth > 128 || len(p.Files)+len(p.Directories) >= 100000 {
 			return errors.New("tree exceeds 128 levels or 100,000 entries; select a smaller directory")
 		}
@@ -269,7 +273,7 @@ func planBatchInternal(s *SFTP, files []FileItem, dest string, get, overwrite bo
 				} else if !os.IsNotExist(err) {
 					return err
 				}
-			} else if !missingDirectories[path.Dir(remote)] {
+			} else if !deferUploadChecks && !missingDirectories[path.Dir(remote)] {
 				var err error
 				old, err = s.Stat(remote, false)
 				if err == nil {
@@ -278,7 +282,7 @@ func planBatchInternal(s *SFTP, files []FileItem, dest string, get, overwrite bo
 					return err
 				}
 			}
-			if !get && !exists {
+			if !get && !deferUploadChecks && !exists {
 				missingDirectories[remote] = true
 			}
 			var real string
@@ -333,6 +337,14 @@ func planBatchInternal(s *SFTP, files []FileItem, dest string, get, overwrite bo
 	if len(p.Files)+len(p.Directories) == 0 {
 		return p, errors.New("no files or directories selected")
 	}
+	var uploadStatuses []byte
+	if deferUploadChecks {
+		scan.setPhase("Checking upload destinations", len(p.Files))
+		uploadStatuses = s.uploadDestinationStatuses(p)
+		if err := checkUploadDirectories(s, p, uploadStatuses, missingDirectories); err != nil {
+			return p, err
+		}
+	}
 	p.remoteReadChecked = remoteScan.readChecked
 	scan.setPhase("Checking destinations and read access", len(p.Files))
 	// Independent file checks overlap their network round trips. Directory checks
@@ -357,6 +369,17 @@ func planBatchInternal(s *SFTP, files []FileItem, dest string, get, overwrite bo
 				}
 			} else if !os.IsNotExist(err) {
 				return err
+			}
+		} else if uploadStatuses != nil && uploadStatuses[len(p.Directories)+i] <= 3 {
+			switch uploadStatuses[len(p.Directories)+i] {
+			case 1:
+				exists = true
+				old.Mode = 0040000
+			case 2:
+				exists = true
+				old.Mode = 0100000
+			case 3:
+				exists = true
 			}
 		} else if !missingDirectories[path.Dir(remote)] {
 			var err error

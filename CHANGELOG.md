@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — Faster transfers and clearer controls
+
+- Stream eligible uploads over one compressed SSH connection and use zstd for downloads when available; keep SFTP and native delta fallbacks.
+- Reduce redundant hashing and sync calls during batch transfers, and fix misleading transfer ETA estimates.
+- Show scan and deletion progress; check removal selections concurrently before changing files.
+- Add in-place cancellation, scrollable error details, and safer recovery after partial operations.
+- Show keyboard shortcuts on the toolbar, wrap it for narrow terminals, and prevent bracketed pastes from triggering actions.
+- Speed up large-directory redraws and reconcile selections when folders are refreshed.
+- Start large copies without an extra confirmation. Move, delete, and overwrite decisions still ask first.
+
 ## 0.3.0 — Dark and Light themes
 
 - Make the neutral Dark theme the default, with softer borders and a muted blue selection.

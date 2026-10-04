@@ -39,6 +39,7 @@ func parseMouse(key string) (mouseEvent, bool) {
 		}
 		*values[i] = n
 	}
+	e.button &^= 4 | 8 | 16 // Shift, Meta, Ctrl do not change the underlying action.
 	e.release = last == 'm'
 	return e, e.x > 0 && e.y > 0
 }

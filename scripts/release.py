@@ -42,6 +42,8 @@ def main():
                 for name in ("README.md", "CHANGELOG.md", "LICENSE"):
                     if (ROOT / name).is_file():
                         tar.add(ROOT / name, arcname=name, filter=metadata)
+                tar.add(ROOT / "docs/third-party-notices.txt",
+                        arcname="THIRD_PARTY_NOTICES.txt", filter=metadata)
             checksums.append(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n")
             print(archive.relative_to(ROOT), flush=True)
     (out / "SHA256SUMS").write_text("".join(checksums))

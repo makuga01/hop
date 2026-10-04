@@ -135,7 +135,45 @@ func (d *dualManager) paneLines(side, w, rows int) []string {
 	}
 	return lines
 }
+
+// Keep both toolbar rows reserved so wrapping never shifts panel hit targets.
+func (d *dualManager) toolbar(w int) ([2]string, map[[2]int]string) {
+	labels := []string{"Machine", "Copy →", "New folder", "Refresh", "Hidden", "Options"}
+	keys := []string{"b", "c", "n", "R", ".", "o"}
+	actions := []string{"machine", "copy", "newfolder", "refresh", "hidden", "settings"}
+	if d.active == 1 {
+		labels[1] = "← Copy"
+	}
+	buttons := make([]string, len(labels))
+	for i, label := range labels {
+		buttons[i] = "[ " + keys[i] + " " + label + " ]"
+	}
+	wrap := textWidth("  "+strings.Join(buttons, "   ")) > w
+	var lines [2]string
+	hits := map[[2]int]string{}
+	row, x := 0, 3
+	for i, button := range buttons {
+		if wrap && i == 3 {
+			row, x = 1, 3
+		}
+		if lines[row] == "" {
+			lines[row] = "  "
+		} else {
+			lines[row] += "   "
+			x += 3
+		}
+		for n := 0; n < textWidth(button); n++ {
+			hits[[2]int{x + n, row + 2}] = actions[i]
+		}
+		lines[row] += button
+		x += textWidth(button)
+	}
+	return lines, hits
+}
 func (d *dualManager) render(w, h int) string {
+	if d.details != "" {
+		return d.detailsView(w, h)
+	}
 	if d.settings {
 		return d.settingsView(w, h)
 	}
@@ -149,12 +187,13 @@ func (d *dualManager) render(w, h int) string {
 	}
 	var out strings.Builder
 	out.WriteString("\x1b[H" + uiTitle("LOCAL ↔ REMOTE", d.host.Label(), l.width) + "\r\n")
-	direction := "Copy →"
-	if d.active == 1 {
-		direction = "← Copy"
+	toolbar, _ := d.toolbar(l.width)
+	out.WriteString(uiLine(toolbar[0], l.width, uiKey))
+	if toolbar[1] != "" {
+		out.WriteString(uiLine(toolbar[1], l.width, uiKey))
+	} else {
+		out.WriteString(uiLine("", l.width, uiBase))
 	}
-	out.WriteString(uiSpans(l.width, uiHeader, uiSpan{"  [ Machine ]", uiKey}, uiSpan{"   [ " + direction + " ]", uiKey}, uiSpan{"   [ New folder ]", uiKey}, uiSpan{"   [ Refresh ]", uiHeader}, uiSpan{"   [ Hidden ]", uiKey}, uiSpan{"   [ Options ]", uiKey}) + "\r\n")
-	out.WriteString(uiLine("", l.width, uiBase))
 	left, right := d.paneLines(0, l.pane, l.rows), d.paneLines(1, l.pane, l.rows)
 	for i := range left {
 		out.WriteString(uiPaint("  ", uiBase) + left[i] + uiPaint("   ", uiBase) + right[i] + uiPaint(strings.Repeat(" ", max(0, l.width-2*l.pane-5)), uiBase) + "\r\n")
@@ -172,6 +211,15 @@ func (d *dualManager) render(w, h int) string {
 		items := m.selected()
 		start := m.selectionStart(l.selectionRows)
 		title := fmt.Sprintf("Selected %s · %d items", []string{"LOCAL", "REMOTE"}[d.active], len(items))
+		inView := 0
+		for _, f := range m.visible() {
+			if _, ok := m.marks[f.Path]; ok {
+				inView++
+			}
+		}
+		if hidden := len(items) - inView; hidden > 0 {
+			title += fmt.Sprintf(" · %d outside view", hidden)
+		}
 		out.WriteString(uiRule(title, l.width, true))
 		drawn++
 		for row, f := range items[start:min(len(items), start+l.selectionRows)] {
@@ -211,7 +259,10 @@ func (d *dualManager) render(w, h int) string {
 	footer := "Tab Panel   c Copy  m Move  dd Delete  / Filter  h Help  o Options"
 	if d.transfer != nil {
 		if d.transfer.busy() {
-			footer = d.transfer.verb() + " · Ctrl-C Cancel and quit"
+			footer = "Esc Stop operation   Ctrl-C Stop and quit"
+			if d.transfer.stopping {
+				footer = "Stopping… · waiting for active work to finish"
+			}
 		}
 		if d.transfer.stage == "conflict" {
 			footer = d.transfer.conflictFooter()
@@ -266,22 +317,10 @@ func (d *dualManager) mouse(e mouseEvent, w, h int) string {
 		m.view(l.rows)
 		return ""
 	}
-	if e.y == 2 && e.button == 0 {
+	if (e.y == 2 || e.y == 3) && e.button == 0 {
 		d.clickPath = ""
-		switch {
-		case e.x >= 3 && e.x <= 13:
-			return "machine"
-		case e.x >= 17 && e.x <= 26:
-			return "copy"
-		case e.x >= 30 && e.x <= 43:
-			return "newfolder"
-		case e.x >= 47 && e.x <= 57:
-			return "refresh"
-		case e.x >= 61 && e.x <= 72:
-			return "hidden"
-		case e.x >= 76 && e.x <= 86:
-			return "settings"
-		}
+		_, hits := d.toolbar(l.width)
+		return hits[[2]int{e.x, e.y}]
 	}
 	if (e.button == 0 || e.button == 2) && (e.y < 9 || e.y >= 9+l.rows) {
 		d.clickPath = ""

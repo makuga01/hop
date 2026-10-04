@@ -10,6 +10,7 @@ import (
 
 type panelTransfer struct {
 	button                      int
+	stopping, wrote             bool
 	scan                        *scanProgress
 	overwrite                   bool
 	ctx                         context.Context
@@ -27,9 +28,6 @@ type transferResult struct {
 }
 
 func (t *panelTransfer) busy() bool { return t != nil && (t.stage == "scan" || t.stage == "copy") }
-func longCopy(p CopyPlan) bool {
-	return p.Total >= 256*1024*1024 || len(p.Files)+len(p.Directories) >= 200
-}
 func (d *dualManager) beginCopy(a managerAction, results chan<- transferResult) {
 	t := &panelTransfer{action: a, destination: d.panes[1-a.side].current, overwrite: d.options.Overwrite}
 	d.transfer = t
@@ -38,6 +36,7 @@ func (d *dualManager) beginCopy(a managerAction, results chan<- transferResult) 
 func (d *dualManager) scanCopy(results chan<- transferResult) {
 	t := d.transfer
 	t.stage = "scan"
+	t.stopping, t.wrote = false, false
 	t.button = 0
 	t.progress = nil
 	t.scan = newScanProgress()
@@ -50,9 +49,17 @@ func (d *dualManager) scanCopy(results chan<- transferResult) {
 		var entries []removalEntry
 		var e error
 		if a.kind == "move" || a.kind == "delete" {
-			entries, e = planRemoval(t.ctx, s, a.files, a.side == 1)
+			entries, e = planRemovalObserved(t.ctx, s, a.files, a.side == 1, t.scan)
 		}
 		if e == nil && a.kind != "delete" {
+			if a.kind == "move" {
+				t.scan.mu.Lock()
+				t.scan.files = 0
+				t.scan.dirs = 0
+				t.scan.checked = 0
+				t.scan.total = 0
+				t.scan.mu.Unlock()
+			}
 			p, e = planBatchObserved(s, a.files, t.destination, a.side == 1, t.overwrite, t.scan)
 		}
 		results <- transferResult{plan: p, removals: entries, err: e}
@@ -61,6 +68,7 @@ func (d *dualManager) scanCopy(results chan<- transferResult) {
 func (d *dualManager) executeCopy(results chan<- transferResult) {
 	t := d.transfer
 	t.stage = "copy"
+	t.wrote = true
 	t.progress = &batchProgress{embedded: true, total: t.plan.Total, files: len(t.plan.Files), phase: "Preparing folders", started: time.Now(), lastChange: time.Now()}
 	if t.action.kind == "delete" {
 		t.progress.removing = true
@@ -77,7 +85,11 @@ func (d *dualManager) executeCopy(results chan<- transferResult) {
 		if e == nil && (t.action.kind == "move" || t.action.kind == "delete") {
 			t.progress.mu.Lock()
 			t.progress.finished = false
-			t.progress.phase = "Removing sources"
+			t.progress.removing = true
+			t.progress.total, t.progress.completed, t.progress.current = 0, 0, 0
+			t.progress.files, t.progress.doneFiles = len(t.removals), 0
+			t.progress.phase = "Checking sources before deletion"
+			t.progress.lastChange = time.Now()
 			t.progress.mu.Unlock()
 			e = executeRemoval(t.ctx, s, t.removals, t.action.side == 1, t.progress)
 			if e != nil && t.action.kind == "move" {
@@ -96,6 +108,17 @@ func (d *dualManager) executeCopy(results chan<- transferResult) {
 }
 func (d *dualManager) copyResult(r transferResult, results chan<- transferResult) bool {
 	t := d.transfer
+	if t.stopping {
+		t.stage = "done"
+		t.cancel()
+		t.progress = nil
+		t.message = t.verb() + " stopped · selection kept"
+		if t.wrote {
+			t.message += " · completed changes are kept"
+		}
+		d.notice = t.message
+		return t.wrote
+	}
 	if r.err != nil {
 		changed := t.stage == "copy"
 		t.cancel()
@@ -118,7 +141,7 @@ func (d *dualManager) copyResult(r transferResult, results chan<- transferResult
 			t.message = "Dry run complete · no files changed"
 			return false
 		}
-		if t.action.kind == "delete" || t.action.kind == "move" || (longCopy(r.plan) && !d.options.Yes) {
+		if t.action.kind == "delete" || t.action.kind == "move" {
 			t.stage = "confirm"
 			t.button = 0
 			return false
@@ -148,10 +171,10 @@ func (d *dualManager) transferLines(w, n int) []string {
 		content = append(content, t.scan.lines()...)
 		content = append(content, "To: "+t.destination)
 		if t.action.kind == "delete" {
-			content = []string{"Scanning selection for deletion…", t.rootSummary()}
+			content = append(t.scan.lines(), t.rootSummary())
 		}
 	case "confirm":
-		content = append(content, fmt.Sprintf("%d files · %d folders · %s — this may take a while", len(t.plan.Files), len(t.plan.Directories), humanSize(t.plan.Total)), "To: "+t.destination)
+		content = append(content, fmt.Sprintf("%d files · %d folders · %s", len(t.plan.Files), len(t.plan.Directories), humanSize(t.plan.Total)), "To: "+t.destination)
 		if t.action.kind == "delete" {
 			content = []string{fmt.Sprintf("Permanently delete %d selected items (%d entries)?", len(t.action.files), len(t.removals))}
 			available := max(0, n-4)
@@ -168,7 +191,8 @@ func (d *dualManager) transferLines(w, n int) []string {
 	case "conflict":
 		content = []string{"Existing destination: " + strings.TrimRight(fitEnd(t.message, w-27), " "), "Replace existing files for this batch?"}
 	case "error":
-		content = append(content, t.verb()+" stopped: "+t.message, "Esc dismiss · selection kept")
+		content = append(content, detailLines(t.verb()+" stopped: "+t.message, w-4)...)
+		content = append(content, "Details shows full error · Esc dismisses · selection kept")
 	default:
 		if p := t.progress; p != nil {
 			p.mu.Lock()
@@ -177,6 +201,9 @@ func (d *dualManager) transferLines(w, n int) []string {
 			content = append(content, fmt.Sprintf("[%s%s] %.0f%% · %d/%d files · %s / %s", strings.Repeat("━", fill), strings.Repeat("·", 16-fill), percent, p.doneFiles, p.files, humanSize(min(p.total, p.completed+p.current)), humanSize(p.total)))
 			if p.removing {
 				content[len(content)-1] = fmt.Sprintf("[%s%s] %.0f%% · %d/%d entries", strings.Repeat("━", fill), strings.Repeat("·", 16-fill), percent, p.doneFiles, p.files)
+			}
+			if p.checking {
+				content[len(content)-1] = fmt.Sprintf("Checking selection · %d/%d entries · no files deleted yet", p.checked, p.files)
 			}
 			if !p.removing {
 				content = append(content, p.rateText(time.Now()))
@@ -248,7 +275,7 @@ func (t *panelTransfer) rootSummary() string {
 }
 
 func (t *panelTransfer) modal() bool {
-	return t != nil && (t.busy() || t.stage == "confirm" || t.stage == "conflict")
+	return t != nil && (t.busy() || t.stage == "confirm" || t.stage == "conflict" || t.stage == "error")
 }
 
 func (t *panelTransfer) buttons() []string {
@@ -258,7 +285,10 @@ func (t *panelTransfer) buttons() []string {
 	case "conflict":
 		return []string{"Replace", "Cancel", "Options"}
 	case "error":
-		return []string{"Retry", "Options", "Dismiss"}
+		if t.wrote {
+			return []string{"Details", "Options", "Dismiss"}
+		}
+		return []string{"Retry", "Options", "Dismiss", "Details"}
 	}
 	return nil
 }

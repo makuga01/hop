@@ -14,8 +14,10 @@ make dist
 ```
 
 `dist/<version>/` contains four tarballs and `SHA256SUMS`. Each tarball contains the
-`hop` executable, README, changelog, and LICENSE if present. Python is only a build/test
-dependency; installed binaries require OpenSSH and a terminal, with no Go runtime.
+`hop` executable, README, changelog, LICENSE if present, and third-party license
+notices. Installed binaries require OpenSSH and a terminal, with no Go runtime.
+Python 3 on the remote host enables optional scanning and download streaming;
+otherwise Hop retains its SFTP path.
 
 ## GitHub releases
 

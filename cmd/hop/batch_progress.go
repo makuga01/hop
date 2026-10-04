@@ -15,6 +15,8 @@ type batchProgress struct {
 	meter                                  transferMeter
 	console                                *activity
 	removing                               bool
+	checking                               bool
+	checked                                int
 	embedded                               bool
 	lines                                  []string
 	mu                                     sync.Mutex
@@ -267,6 +269,10 @@ func (f *fileProgress) complete(err error) {
 func (p *batchProgress) setBackend(name string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.backend != name {
+		// A new transfer method has a different cost model (e.g. stream -> delta).
+		p.meter.samples = []transferSample{{at: time.Now(), bytes: min(p.total, p.completed+p.current), files: p.doneFiles}}
+	}
 	p.backend = name
 	p.phase = "Copying files"
 	p.lastChange = time.Now()

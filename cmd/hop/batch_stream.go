@@ -19,13 +19,14 @@ import (
 	"time"
 )
 
-const batchDownloadPython = `import os,sys,json,base64,stat,struct,hashlib,gzip
-requests=json.load(gzip.GzipFile(fileobj=sys.stdin.buffer,mode='rb'))
-sys.stdout.buffer.write(b'HOPFILES1\n');sys.stdout.buffer.flush()
-out=gzip.GzipFile(fileobj=sys.stdout.buffer,mode='wb',compresslevel=1)
+const batchDownloadPython = batchCompressionPython + `import os,sys,json,base64,stat,struct,hashlib,gzip
+manifest=json.load(gzip.GzipFile(fileobj=sys.stdin.buffer,mode='rb'))
+requests=manifest['files'];hashes=manifest['hashes']
+out=batch_output()
 def identity(a): return (a.st_dev,a.st_ino,a.st_size,a.st_mtime_ns,a.st_ctime_ns)
 seen={}
 for index,name,size,local_hash in requests:
+ local_hash=hashes[local_hash-1] if local_hash else ''
  p=base64.b64decode(name,validate=True)
  fd=os.open(p,os.O_RDONLY|os.O_NONBLOCK)
  with os.fdopen(fd,'rb') as f:
@@ -33,14 +34,25 @@ for index,name,size,local_hash in requests:
   if not stat.S_ISREG(before.st_mode) or before.st_size!=size: raise RuntimeError('source changed at entry %d'%index)
   key=identity(before)+(before.st_mode,)
   if local_hash:
-   data=f.read(size+1);digest=hashlib.sha256(data).digest()
+   if size<=1048576:
+    data=f.read(size+1);length=len(data);digest=hashlib.sha256(data).digest()
+   else:
+    h=hashlib.sha256();length=0
+    while length<=size:
+     chunk=f.read(min(1048576,size+1-length))
+     if not chunk: break
+     h.update(chunk);length+=len(chunk)
+    digest=h.digest()
    after=os.fstat(f.fileno())
-   if len(data)!=size or identity(before)!=identity(after) or identity(after)!=identity(os.stat(p)): raise RuntimeError('source changed at entry %d'%index)
+   if length!=size or identity(before)!=identity(after) or identity(after)!=identity(os.stat(p)): raise RuntimeError('source changed at entry %d'%index)
+   reusable=True
    if base64.b64decode(local_hash,validate=True)==digest:
     out.write(struct.pack('>IQII',index,size,before.st_mode|2147483648,index));out.write(digest)
+   elif size>1048576:
+    out.write(struct.pack('>IQI',index,size,before.st_mode|1073741824));reusable=False
    else:
     out.write(struct.pack('>IQI',index,size,before.st_mode));out.write(data);out.write(digest)
-   if before.st_mode&256: seen[key]=(index,digest)
+   if reusable and before.st_mode&256: seen[key]=(index,digest)
    if index%64==0: out.flush()
    continue
   if key in seen:
@@ -63,33 +75,61 @@ for index,name,size,local_hash in requests:
 out.write(struct.pack('>I',4294967295));out.close()
 `
 
-// Fresh downloads share one bounded stream; authorized small replacements also
-// use it. Existing large files retain native delta reuse.
+// Fresh downloads and authorized replacements share one bounded stream.
+// Changed large replacements are deferred to native delta reuse.
 func streamDownloads(s *SFTP, plan CopyPlan, o Options, p *batchProgress, completed []bool) error {
-	if !plan.remoteReadChecked || o.DryRun || os.Getenv("HOP_TRANSFER_BACKEND") == "sftp" {
+	if !plan.remoteReadChecked || len(plan.Files) < 32 || o.DryRun || os.Getenv("HOP_TRANSFER_BACKEND") == "sftp" {
 		return nil
 	}
+	ctx, cancel := context.WithCancel(s.externalContext())
+	defer cancel()
 	indices := []int{}
 	requests := [][4]any{}
 	localHashes := map[int][32]byte{}
+	hashIDs := map[[32]byte]int{}
+	var hashes []string
+	var candidates [][32]byte
+	var known []bool
+	if o.Overwrite {
+		candidates = make([][32]byte, len(plan.Files))
+		known = make([]bool, len(plan.Files))
+		if err := parallelFilesN(len(plan.Files), 8, func(i int) error {
+			f := plan.Files[i]
+			if f.Replace {
+				candidates[i], known[i] = streamBasisHash(ctx, f.Local, f.Size)
+			}
+			return ctx.Err()
+		}); err != nil {
+			return err
+		}
+	}
 	for i, f := range plan.Files {
-		if !f.Replace || (o.Overwrite && f.Size <= 1<<20) {
-			indices = append(indices, i)
-			hashText := ""
-			if f.Replace && o.Overwrite && f.Size <= 1<<20 {
-				if digest, ok := streamBasisHash(f.Local, f.Size); ok {
+		if !f.Replace || o.Overwrite {
+			hashID := 0
+			if f.Replace && o.Overwrite {
+				if digest, ok := candidates[i], known[i]; ok {
 					localHashes[i] = digest
-					hashText = base64.StdEncoding.EncodeToString(digest[:])
+					hashID = hashIDs[digest]
+					if hashID == 0 {
+						hashes = append(hashes, base64.StdEncoding.EncodeToString(digest[:]))
+						hashID = len(hashes)
+						hashIDs[digest] = hashID
+					}
 				}
 			}
-			requests = append(requests, [4]any{i, base64.StdEncoding.EncodeToString([]byte(f.Remote)), f.Size, hashText})
+			if f.Replace && f.Size > 1<<20 && hashID == 0 {
+				continue // Unknown large bases keep the existing delta/SFTP path.
+			}
+			indices = append(indices, i)
+			requests = append(requests, [4]any{i, base64.StdEncoding.EncodeToString([]byte(f.Remote)), f.Size, hashID})
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 	}
 	if len(indices) < 32 {
 		return nil
 	}
-	ctx, cancel := context.WithCancel(s.externalContext())
-	defer cancel()
 	var cmd *exec.Cmd
 	if s.batchCommand != nil {
 		cmd = s.batchCommand(ctx)
@@ -99,7 +139,10 @@ func streamDownloads(s *SFTP, plan CopyPlan, o Options, p *batchProgress, comple
 		}
 		cmd = exec.CommandContext(ctx, "/usr/bin/ssh", append(rsyncSSHArgs(s.host), "--", s.host.Target, "python3 -c "+shellQuote(batchDownloadPython))...)
 	}
-	input, err := json.Marshal(requests)
+	input, err := json.Marshal(struct {
+		Files  [][4]any `json:"files"`
+		Hashes []string `json:"hashes"`
+	}{requests, hashes})
 	if err != nil {
 		return err
 	}
@@ -129,12 +172,12 @@ func streamDownloads(s *SFTP, plan CopyPlan, o Options, p *batchProgress, comple
 	defer timer.Stop()
 	reader := bufio.NewReader(output)
 	magic := make([]byte, len("HOPFILES1\n"))
-	if _, err = io.ReadFull(reader, magic); err != nil || string(magic) != "HOPFILES1\n" {
+	if _, err = io.ReadFull(reader, magic); err != nil || (string(magic) != "HOPFILES1\n" && string(magic) != "HOPFILEZ1\n") {
 		cancel()
 		cmd.Wait()
 		return nil
 	}
-	compressed, err := gzip.NewReader(reader)
+	compressed, err := batchDecompressor(string(magic), reader)
 	if err != nil {
 		cancel()
 		cmd.Wait()
@@ -149,50 +192,105 @@ func streamDownloads(s *SFTP, plan CopyPlan, o Options, p *batchProgress, comple
 		file     *os.File
 		progress *fileProgress
 		ready    chan struct{}
+		original os.FileInfo
 	}
 	jobs := make(chan job, 16)
 	ready := map[int]chan struct{}{}
 	verified := map[int][32]byte{}
+	deferred := map[int]bool{}
 	var wg sync.WaitGroup
-	var once sync.Once
 	var commitErr error
-	for n := 0; n < 8; n++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := range jobs {
-				if ctx.Err() != nil {
-					if j.file != nil {
-						j.file.Close()
-						os.Remove(j.file.Name())
-						j.progress.complete(ctx.Err())
-					}
-					close(j.ready)
-					continue
-				}
+	flush := make(chan struct{}, 1)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		process := func(batch []job) {
+			pending := make([]*pendingStreamFile, len(batch))
+			committed := make([]bool, len(batch))
+			for i, j := range batch {
 				f := plan.Files[j.index]
-				progress := j.progress
-				if progress == nil {
-					progress = p.startFile(f, true, plan.Destination)
-				}
-				var e error
-				if j.file != nil {
-					e = commitStreamTemp(j.file, f.Local, j.mode)
-				} else {
-					e = commitStreamFile(f.Local, j.data, j.mode, f.Replace && o.Overwrite)
-				}
-				if e == nil {
-					progress.update(f.Size)
-					completed[j.index] = true
-				}
-				progress.complete(e)
-				close(j.ready)
-				if e != nil {
-					once.Do(func() { commitErr = e; cancel() })
+				pending[i] = &pendingStreamFile{to: f.Local, data: j.data, mode: j.mode, replace: f.Replace && o.Overwrite, file: j.file, original: j.original}
+				if batch[i].progress == nil {
+					batch[i].progress = p.startFile(f, true, plan.Destination)
 				}
 			}
-		}()
-	}
+			phase := func(action func(*pendingStreamFile) error) error {
+				return parallelFilesN(len(batch), 8, func(i int) error {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					return action(pending[i])
+				})
+			}
+			e := phase((*pendingStreamFile).prepare)
+			for i := range pending {
+				pending[i].data = nil
+				batch[i].data = nil
+			}
+			if e == nil {
+				e = syncStreamBatch(ctx, pending)
+			}
+			if e == nil {
+				e = parallelFilesN(len(batch), 8, func(i int) error {
+					if err := ctx.Err(); err != nil {
+						return err
+					}
+					if err := pending[i].publish(); err != nil {
+						return err
+					}
+					committed[i] = true
+					return nil
+				})
+			}
+			for i, j := range batch {
+				pending[i].cleanup()
+				result := e
+				if committed[i] {
+					result = nil
+					j.progress.update(plan.Files[j.index].Size)
+					completed[j.index] = true
+				}
+				j.progress.complete(result)
+				close(j.ready)
+			}
+			if e != nil {
+				// Cancellation after a protocol error must not hide that error.
+				if commitErr == nil && !errors.Is(e, context.Canceled) && !errors.Is(e, context.DeadlineExceeded) {
+					commitErr = e
+				}
+				cancel()
+			}
+		}
+		for first := range jobs {
+			batch := []job{first}
+			size := len(first.data)
+			deadline := time.NewTimer(100 * time.Millisecond)
+			closed := false
+		gather:
+			for len(batch) < 64 && size < 8<<20 {
+				select {
+				case j, ok := <-jobs:
+					if !ok {
+						closed = true
+						break gather
+					}
+					batch = append(batch, j)
+					size += len(j.data)
+				case <-flush:
+					break gather
+				case <-deadline.C:
+					break gather
+				case <-ctx.Done():
+					break gather
+				}
+			}
+			deadline.Stop()
+			process(batch)
+			if closed {
+				return
+			}
+		}
+	}()
 	for _, expected := range indices {
 		var header [16]byte
 		if _, err = io.ReadFull(compressed, header[:]); err != nil {
@@ -202,10 +300,20 @@ func streamDownloads(s *SFTP, plan CopyPlan, o Options, p *batchProgress, comple
 		size := binary.BigEndian.Uint64(header[4:12])
 		mode := binary.BigEndian.Uint32(header[12:])
 		reference := mode&0x80000000 != 0
-		mode &^= 0x80000000
+		deferLarge := mode&0x40000000 != 0
+		mode &^= 0xc0000000
 		if uint64(index) != uint64(expected) || size != plan.Files[expected].Size || mode&0170000 != 0100000 {
 			err = errors.New("invalid batch file header")
 			break
+		}
+		if deferLarge {
+			if reference || !plan.Files[expected].Replace || !o.Overwrite || size <= 1<<20 {
+				err = errors.New("invalid deferred batch file")
+				break
+			}
+			deferred[expected] = true
+			timer.Reset(timeout)
+			continue
 		}
 		j := job{index: expected, mode: mode, ready: make(chan struct{})}
 		ready[expected] = j.ready
@@ -234,6 +342,16 @@ func streamDownloads(s *SFTP, plan CopyPlan, o Options, p *batchProgress, comple
 				break
 			}
 			if index != expected {
+				// A reference may need a file still in the current commit batch.
+				// Flush it now rather than waiting for the batch to fill.
+				select {
+				case <-ready[index]:
+				default:
+					select {
+					case flush <- struct{}{}:
+					default:
+					}
+				}
 				select {
 				case <-ready[index]:
 				case <-ctx.Done():
@@ -259,9 +377,20 @@ func streamDownloads(s *SFTP, plan CopyPlan, o Options, p *batchProgress, comple
 				break
 			}
 			dataReader = basis
+			if index == expected && size > 1<<20 {
+				j.original = info
+			}
 		}
 		hash := sha256.New()
-		if size <= 1<<20 {
+		if j.original != nil {
+			// Recheck the complete local content, but do not stage another copy
+			// of an unchanged large file. Publication revalidates its identity.
+			var n int64
+			n, err = io.Copy(hash, io.LimitReader(streamContextReader{ctx, dataReader}, int64(size)+1))
+			if err == nil && n != int64(size) {
+				err = errors.New("local reference changed")
+			}
+		} else if size <= 1<<20 {
 			j.data = make([]byte, int(size))
 			_, err = io.ReadFull(dataReader, j.data)
 			hash.Write(j.data)
@@ -360,15 +489,37 @@ func streamDownloads(s *SFTP, plan CopyPlan, o Options, p *batchProgress, comple
 	// commits unfinished. Never report success (or allow Move to remove sources)
 	// until every selected destination has been committed.
 	for _, index := range indices {
-		if !completed[index] {
+		if !completed[index] && !deferred[index] {
 			return errors.New("batch download stopped before all files were committed")
 		}
 	}
 	return nil
 }
 
-func commitStreamFile(to string, data []byte, mode uint32, replace bool) error {
+// A pending file is not published until the entire batch has finished syncing.
+// Keeping writes, syncs and publication in separate phases avoids flushing
+// newly-created metadata between every pair of small files.
+type pendingStreamFile struct {
+	to       string
+	data     []byte
+	mode     uint32
+	replace  bool
+	file     *os.File
+	original os.FileInfo
+	synced   bool
+}
+
+func (p *pendingStreamFile) prepare() error {
+	if p.original != nil {
+		return p.prepareUnchanged()
+	}
+	if p.file != nil {
+		return p.file.Chmod(os.FileMode(p.mode & 0777))
+	}
+
+	to, data, mode, replace := p.to, p.data, p.mode, p.replace
 	original, err := os.Lstat(to)
+	p.original = original
 	exists := err == nil
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -428,49 +579,112 @@ func commitStreamFile(to string, data []byte, mode uint32, replace bool) error {
 	if err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	p.file = f
 	if _, err = f.Write(data); err != nil {
 		return err
 	}
 	if err = f.Chmod(os.FileMode(mode & 0777)); err != nil {
 		return err
 	}
-	if err = f.Sync(); err != nil {
+	return nil
+}
+
+// The receiver already verified this large file against the remote SHA-256.
+// Keep its inode and timestamps, and apply permissions through a checked handle.
+func (p *pendingStreamFile) prepareUnchanged() error {
+	pathInfo, err := os.Lstat(p.to)
+	if err != nil || !pathInfo.Mode().IsRegular() || !os.SameFile(p.original, pathInfo) {
+		return errors.New("verified destination changed")
+	}
+	f, err := os.Open(p.to)
+	if err != nil {
 		return err
 	}
-	if err = f.Close(); err != nil {
+	defer f.Close()
+	now, err := f.Stat()
+	if err != nil || !now.Mode().IsRegular() || !os.SameFile(p.original, now) || now.Size() != p.original.Size() || now.ModTime() != p.original.ModTime() {
+		return errors.New("verified destination changed")
+	}
+	if now.Mode().Perm() != os.FileMode(p.mode&0777) {
+		if err := f.Chmod(os.FileMode(p.mode & 0777)); err != nil {
+			return err
+		}
+		if err := f.Sync(); err != nil {
+			return err
+		}
+	}
+	return f.Close()
+}
+
+func (p *pendingStreamFile) sync() error {
+	if p.file == nil {
+		return nil
+	}
+	if err := p.file.Sync(); err != nil {
 		return err
 	}
-	if exists && replace {
-		now, e := os.Lstat(to)
-		if e != nil || !now.Mode().IsRegular() || !os.SameFile(original, now) || now.Size() != original.Size() || now.ModTime() != original.ModTime() {
+	if err := p.file.Close(); err != nil {
+		return err
+	}
+	p.synced = true
+	return nil
+}
+
+func (p *pendingStreamFile) publish() error {
+	if p.original != nil {
+		now, err := os.Lstat(p.to)
+		if err != nil || !now.Mode().IsRegular() || !os.SameFile(p.original, now) || now.Size() != p.original.Size() || now.ModTime() != p.original.ModTime() {
 			return errors.New("destination changed before replacement")
 		}
-		return os.Rename(f.Name(), to)
 	}
-	return os.Link(f.Name(), to)
+	if p.file == nil {
+		return nil
+	}
+	if !p.synced {
+		return errors.New("cannot publish an unsynced stream file")
+	}
+	if p.original != nil && p.replace {
+		return os.Rename(p.file.Name(), p.to)
+	}
+	return os.Link(p.file.Name(), p.to)
+}
+
+func (p *pendingStreamFile) cleanup() {
+	if p.file != nil {
+		p.file.Close()
+		os.Remove(p.file.Name())
+	}
+}
+
+func commitStreamFile(to string, data []byte, mode uint32, replace bool) error {
+	p := &pendingStreamFile{to: to, data: data, mode: mode, replace: replace}
+	defer p.cleanup()
+	if err := p.prepare(); err != nil {
+		return err
+	}
+	if err := p.sync(); err != nil {
+		return err
+	}
+	return p.publish()
 }
 
 // Called only after the entire stream file and its checksum have been verified.
 func commitStreamTemp(f *os.File, to string, mode uint32) error {
-	defer f.Close()
-	defer os.Remove(f.Name())
-	if err := f.Chmod(os.FileMode(mode & 0777)); err != nil {
+	p := &pendingStreamFile{file: f, to: to, mode: mode}
+	defer p.cleanup()
+	if err := p.prepare(); err != nil {
 		return err
 	}
-	if err := f.Sync(); err != nil {
+	if err := p.sync(); err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Link(f.Name(), to)
+	return p.publish()
 }
 
-// Hash only small regular local files that the user authorized replacing.
+// Hash regular local files that the user authorized replacing, without buffering
+// their contents in memory. This includes large files for the unchanged fast path.
 // Revalidate the open handle to avoid trusting a changed path or stale metadata.
-func streamBasisHash(name string, size uint64) ([32]byte, bool) {
+func streamBasisHash(ctx context.Context, name string, size uint64) ([32]byte, bool) {
 	var empty [32]byte
 	info, err := os.Lstat(name)
 	if err != nil || !info.Mode().IsRegular() || info.Size() != int64(size) {
@@ -486,7 +700,7 @@ func streamBasisHash(name string, size uint64) ([32]byte, bool) {
 		return empty, false
 	}
 	hash := sha256.New()
-	n, err := io.Copy(hash, io.LimitReader(f, int64(size)+1))
+	n, err := io.Copy(hash, io.LimitReader(streamContextReader{ctx, f}, int64(size)+1))
 	after, e := f.Stat()
 	if err != nil || e != nil || n != int64(size) || after.Size() != before.Size() || !after.ModTime().Equal(before.ModTime()) {
 		return empty, false
@@ -494,4 +708,16 @@ func streamBasisHash(name string, size uint64) ([32]byte, bool) {
 	var digest [32]byte
 	copy(digest[:], hash.Sum(nil))
 	return digest, true
+}
+
+type streamContextReader struct {
+	ctx context.Context
+	in  io.Reader
+}
+
+func (r streamContextReader) Read(b []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.in.Read(b)
 }

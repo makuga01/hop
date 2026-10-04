@@ -44,7 +44,18 @@ type browserListing struct {
 	Items  []FileItem
 	Err    error
 }
+
+// Listings are replaced, never edited in place. Cache filtering/sorting until
+// the listing or view options change; cursor movement and redraw need no sort.
+type listingCache struct {
+	source, visible []FileItem
+	query           string
+	hidden, virtual bool
+	order           SortOrder
+	valid           bool
+}
 type browserModel struct {
+	listing                               listingCache
 	hideDotfiles                          bool
 	current                               string
 	items, recent                         []FileItem
@@ -81,7 +92,12 @@ func (m *browserModel) visible() []FileItem {
 	if m.review {
 		return m.selected()
 	}
-	out := []FileItem{}
+	c := &m.listing
+	same := len(c.source) == len(m.items) && (len(m.items) == 0 || &c.source[0] == &m.items[0])
+	if c.valid && same && c.query == m.query && c.hidden == m.hideDotfiles && c.virtual == m.virtual && c.order == m.sortOrder {
+		return c.visible
+	}
+	out := make([]FileItem, 0, len(m.items))
 	for _, f := range m.items {
 		if m.hideDotfiles && f.Name != ".." && strings.HasPrefix(path.Base(f.Name), ".") {
 			continue
@@ -93,6 +109,7 @@ func (m *browserModel) visible() []FileItem {
 	if !m.virtual || m.sortOrder.Explicit {
 		sortFiles(out, m.sortOrder)
 	}
+	*c = listingCache{source: m.items, visible: out, query: m.query, hidden: m.hideDotfiles, virtual: m.virtual, order: m.sortOrder, valid: true}
 	return out
 }
 func (m *browserModel) selected() []FileItem {
@@ -145,6 +162,29 @@ func (m *browserModel) apply(r browserListing) {
 	m.offset = 0
 	m.current = r.Target
 	m.items = r.Items
+	m.listing.valid = false
+	// Refresh only reconciles marks in the directory actually loaded. Marks in
+	// other folders remain selected, and a failed listing must never erase them.
+	if r.Err == nil {
+		present := make(map[string]FileItem, len(r.Items))
+		for _, f := range r.Items {
+			present[f.Path] = f
+		}
+		kept := m.order[:0]
+		for _, name := range m.order {
+			if path.Dir(name) == r.Target {
+				if f, ok := present[name]; ok {
+					m.marks[name] = f
+				} else {
+					delete(m.marks, name)
+				}
+			}
+			if _, ok := m.marks[name]; ok {
+				kept = append(kept, name)
+			}
+		}
+		m.order = kept
+	}
 	m.virtual = false
 	m.query = ""
 	m.cursor = 0

@@ -37,7 +37,7 @@ Options:
   --sort name|date|size|type    Initial sort for both panels
   --order asc|desc             Initial direction
   --overwrite                  Allow replacing existing destination files
-  --yes                        Skip copy review
+  --yes                        Skip the one-shot CLI copy review
   --dry-run                    Preview transfers; disable folder creation
   --no-history                 Do not read remote history for recent locations
   -p PORT  -i KEY  -J JUMP  -F CONFIG    OpenSSH connection overrides
@@ -50,6 +50,7 @@ Ctrl-B changes the SSH machine. Ctrl-N creates a folder in the active panel.
 Ctrl-L enters a path. Ctrl-R picks recent paths. Ctrl-E refreshes both panels.
 Ctrl-O cycles name/date/size/type sorting; click column headers to reverse order.
 / focuses the filter; Esc/Enter leaves it. Ctrl-U clears. q / Ctrl-C quits.
+Esc during work stops it and keeps Hop open; completed changes are kept.
 Esc in normal mode clears all marks in the active panel before filter/status.
 j/k move down/up; l opens; H/u goes to parent; gg/G goes first/last.
 o opens session/connection Options. Conflicts offer Replace without restarting.

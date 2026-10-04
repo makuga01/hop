@@ -68,8 +68,12 @@ func copyPlannedFiles(s *SFTP, h Host, plan CopyPlan, get bool, o Options, p *ba
 	if handled {
 		p.setBackend("rsync")
 	}
-	if !handled && get {
-		err = streamDownloads(s, plan, o, p, completed)
+	if !handled {
+		if get {
+			err = streamDownloads(s, plan, o, p, completed)
+		} else {
+			err = streamUploads(s, plan, o, p, completed)
+		}
 	}
 	if !handled && err == nil {
 		for _, done := range completed {

@@ -77,10 +77,7 @@ func TestLinkedSources(t *testing.T) {
 		}
 	}
 }
-func TestTransferDockAndThreshold(t *testing.T) {
-	if longCopy(CopyPlan{Total: 256*1024*1024 - 1}) || !longCopy(CopyPlan{Total: 256 * 1024 * 1024}) || !longCopy(CopyPlan{Files: make([]PlannedFile, 200)}) {
-		t.Fatal("threshold")
-	}
+func TestTransferDockLayout(t *testing.T) {
 	strip := regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]`)
 	for _, stage := range []string{"scan", "confirm", "copy", "done", "error"} {
 		for _, size := range [][2]int{{64, 18}, {80, 24}, {110, 28}, {200, 40}} {
@@ -124,9 +121,14 @@ func TestManagerDockInterruptHelper(t *testing.T) {
 	if os.Getenv("MANAGER_DOCK_INTERRUPT") != "1" {
 		t.Skip("PTY helper")
 	}
-	reader, writer := io.Pipe()
-	defer reader.Close()
+	requests, writer := io.Pipe()
+	reader, responses := io.Pipe()
+	defer requests.Close()
 	defer writer.Close()
+	defer reader.Close()
+	defer responses.Close()
+	// Consume requests but never answer, simulating a genuinely stalled server.
+	go io.Copy(io.Discard, requests)
 	d := managerFixture()
 	d.sftp = &SFTP{in: writer, out: reader}
 	for i := range d.loaders {
@@ -136,7 +138,14 @@ func TestManagerDockInterruptHelper(t *testing.T) {
 	screen := beginFullscreen()
 	defer screen.Close()
 	a, e := d.Run()
-	if e != nil || a.kind != "quit" {
+	want := "quit"
+	if os.Getenv("MANAGER_STOP_MODE") == "escape" {
+		want = "reconnect"
+		if d.transfer.busy() || !strings.Contains(d.notice, "stopped") || d.panes[0].query != "alpha" {
+			t.Fatal("stop lost manager state")
+		}
+	}
+	if e != nil || a.kind != want {
 		t.Fatal(a, e)
 	}
 	fmt.Println("DOCK_INTERRUPTED")

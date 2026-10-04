@@ -1,9 +1,9 @@
 import os, select, subprocess, sys, time, fcntl, struct, termios, signal
-for via_signal in (False, True):
+for via_signal in (False, True, "escape"):
  master,slave=os.openpty()
  fcntl.ioctl(slave,termios.TIOCSWINSZ,struct.pack('HHHH',28,110,0,0))
  initial=termios.tcgetattr(master)
- p=subprocess.Popen([sys.argv[1],'-test.run=^TestManagerDockInterruptHelper$'],stdin=slave,stdout=slave,stderr=slave,env=dict(os.environ,MANAGER_DOCK_INTERRUPT='1',TERM='xterm-256color'),start_new_session=True)
+ p=subprocess.Popen([sys.argv[1],'-test.run=^TestManagerDockInterruptHelper$'],stdin=slave,stdout=slave,stderr=slave,env=dict(os.environ,MANAGER_DOCK_INTERRUPT='1',MANAGER_STOP_MODE=str(via_signal),TERM='xterm-256color'),start_new_session=True)
  os.close(slave);data=bytearray()
  def wait(text):
   end=time.monotonic()+10
@@ -24,8 +24,10 @@ for via_signal in (False, True):
   os.write(master,b'/alpha\x1bc');wait('folders found')
   os.write(master,b'\r');time.sleep(.2)
   assert p.poll() is None,'Enter cancelled a running copy'
-  if via_signal:p.send_signal(signal.SIGINT)
-  else:os.write(master,b'\x03')
+  if via_signal == "escape":os.write(master,b'\x1b')
+  elif via_signal:p.send_signal(signal.SIGINT)
+  else:
+   os.write(master,b'\x03')
   wait('DOCK_INTERRUPTED');assert p.wait(timeout=5)==0
   assert termios.tcgetattr(master)==initial,'terminal left raw after cancellation'
  finally:

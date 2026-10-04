@@ -164,7 +164,11 @@ func TestManagerTerminalHelper(t *testing.T) {
 	}
 	large.Close()
 	screen := beginFullscreen()
-	defer screen.Close()
+	defer func() {
+		if screen != nil {
+			screen.Close()
+		}
+	}()
 	d := newManager(local, remote, Host{Target: "fixture"}, s, SortOrder{})
 	if e := os.Mkdir(filepath.Join(remote, "private"), 0755); e != nil {
 		t.Fatal(e)
@@ -189,8 +193,8 @@ func TestManagerTerminalHelper(t *testing.T) {
 	if info, e := os.Stat(filepath.Join(local, "new folder")); e != nil || !info.IsDir() {
 		t.Fatal("folder not created", e)
 	}
-	if _, e := os.Stat(filepath.Join(remote, "large.bin")); !os.IsNotExist(e) {
-		t.Fatal("cancelled large copy wrote destination")
+	if info, e := os.Stat(filepath.Join(remote, "large.bin")); e != nil || info.Size() != 256*1024*1024 {
+		t.Fatal("large copy did not complete without an extra confirmation", e)
 	}
 	for _, root := range []string{local, remote} {
 		if _, e := os.Stat(filepath.Join(root, "discard.txt")); !os.IsNotExist(e) {
@@ -209,6 +213,8 @@ func TestManagerTerminalHelper(t *testing.T) {
 	if _, e := os.Stat(filepath.Join(local, "replace.txt")); !os.IsNotExist(e) {
 		t.Fatal("GUI move retained source", e)
 	}
+	screen.Close()
+	screen = nil
 	fmt.Println("MANAGER_OK")
 }
 

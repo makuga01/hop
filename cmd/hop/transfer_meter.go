@@ -28,35 +28,47 @@ func (m *transferMeter) text(now, started time.Time, bytes, total uint64, files,
 	if now.Sub(m.samples[len(m.samples)-1].at) >= 200*time.Millisecond {
 		m.samples = append(m.samples, current)
 	}
-	for len(m.samples) > 2 && now.Sub(m.samples[1].at) >= 5*time.Second {
+	// Keep a longer history for ETA; the displayed speed remains responsive.
+	for len(m.samples) > 2 && now.Sub(m.samples[1].at) >= 20*time.Second {
 		m.samples = m.samples[1:]
 	}
 	first := m.samples[0]
-	seconds := now.Sub(first.at).Seconds()
-	rate, fileRate := 0.0, 0.0
-	if seconds >= 1 {
-		rate = float64(bytes-first.bytes) / seconds
-		fileRate = float64(files-first.files) / seconds
-	}
-	eta := "—"
-	remaining := 0.0
-	known := seconds >= 1
-	if bytes < total {
-		if rate > 0 {
-			remaining = float64(total-bytes) / rate
+	recent := first
+	for _, sample := range m.samples {
+		if now.Sub(sample.at) >= 5*time.Second {
+			recent = sample
 		} else {
-			known = false
+			break
 		}
 	}
-	if count > files {
-		if fileRate > 0 {
-			remaining = math.Max(remaining, float64(count-files)/fileRate)
-		} else if bytes >= total {
-			known = false
+	seconds := now.Sub(recent.at).Seconds()
+	rate := 0.0
+	if seconds >= 1 {
+		rate = float64(bytes-recent.bytes) / seconds
+	}
+	eta := "—"
+	elapsed := now.Sub(first.at).Seconds()
+	remaining := 0.0
+	known := elapsed >= 3
+	if bytes < total {
+		average := float64(bytes-first.bytes) / math.Max(elapsed, 1)
+		// File completions are not a clock: a large file can occupy the stream
+		// while thousands of tiny files remain. Never extrapolate that file count
+		// over a byte transfer. Suppress estimates during stalls or sharp bursts.
+		known = known && average > 0 && rate > 0 && float64(bytes) >= float64(total)*.01
+		if known {
+			known = rate/average >= .25 && rate/average <= 4
+			remaining = float64(total-bytes) / average
+		}
+	} else if total == 0 && count > files {
+		fileRate := float64(files-first.files) / math.Max(elapsed, 1)
+		known = known && fileRate > 0 && files > recent.files
+		if known {
+			remaining = float64(count-files) / fileRate
 		}
 	}
 	if known && remaining > 0 {
-		eta = transferDuration(remaining)
+		eta = "~" + transferDuration(remaining)
 	}
 	if finished {
 		eta = "0s"

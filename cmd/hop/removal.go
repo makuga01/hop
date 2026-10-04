@@ -7,6 +7,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 )
 
 type removalEntry struct {
@@ -65,10 +66,30 @@ func removalChildren(s *SFTP, name string, remote bool) ([]string, error) {
 
 // Record a postorder tree without following links. Every removal is non-recursive.
 func planRemoval(ctx context.Context, s *SFTP, files []FileItem, remote bool) ([]removalEntry, error) {
+	return planRemovalObserved(ctx, s, files, remote, nil)
+}
+
+func planRemovalObserved(ctx context.Context, s *SFTP, files []FileItem, remote bool, progress *scanProgress) ([]removalEntry, error) {
+	progress.setPhase("Scanning selection for deletion", 0)
+	if remote {
+		entries, err := s.scanRemovalWithHelper(ctx, files, progress)
+		if err == nil {
+			return entries, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if progress != nil {
+			progress.mu.Lock()
+			progress.files = 0
+			progress.dirs = 0
+			progress.mu.Unlock()
+		}
+	}
 	entries := []removalEntry{}
 	seen := map[string]bool{}
-	var walk func(string, int) error
-	walk = func(name string, depth int) error {
+	var walk func(string, int, *Attr) error
+	walk = func(name string, depth int, known *Attr) error {
 		if e := ctx.Err(); e != nil {
 			return e
 		}
@@ -83,12 +104,30 @@ func planRemoval(ctx context.Context, s *SFTP, files []FileItem, remote bool) ([
 		if depth > 128 || len(seen) > 100000 {
 			return fmt.Errorf("selection exceeds 128 levels or 100,000 entries")
 		}
-		r, e := removalStat(s, name, remote)
+		var r removalEntry
+		var e error
+		if remote && known != nil && known.Flags&13 == 13 {
+			r = removalEntry{name: name, attr: *known}
+		} else {
+			r, e = removalStat(s, name, remote)
+		}
 		if e != nil {
 			return e
 		}
+		progress.found(r.attr.Dir())
 		if r.attr.Dir() {
-			r.children, e = removalChildren(s, name, remote)
+			attrs := map[string]Attr{}
+			if remote {
+				var children []Entry
+				children, e = s.ReadDir(name)
+				for _, child := range children {
+					r.children = append(r.children, child.Name)
+					attrs[child.Name] = child.Attr
+				}
+				sort.Strings(r.children)
+			} else {
+				r.children, e = removalChildren(s, name, false)
+			}
 			if e != nil {
 				return e
 			}
@@ -96,7 +135,8 @@ func planRemoval(ctx context.Context, s *SFTP, files []FileItem, remote bool) ([
 				if child == "." || child == ".." || strings.Contains(child, "/") {
 					return fmt.Errorf("invalid directory entry")
 				}
-				if e = walk(path.Join(name, child), depth+1); e != nil {
+				a := attrs[child]
+				if e = walk(path.Join(name, child), depth+1, &a); e != nil {
 					return e
 				}
 			}
@@ -105,7 +145,7 @@ func planRemoval(ctx context.Context, s *SFTP, files []FileItem, remote bool) ([
 		return nil
 	}
 	for _, f := range files {
-		if e := walk(f.Path, 0); e != nil {
+		if e := walk(f.Path, 0, nil); e != nil {
 			return nil, e
 		}
 	}
@@ -142,13 +182,50 @@ func unchangedRemoval(s *SFTP, want removalEntry, remote, full bool) error {
 }
 func executeRemoval(ctx context.Context, s *SFTP, entries []removalEntry, remote bool, p *batchProgress) error {
 	// Validate the entire original selection before deleting any of it.
-	for _, r := range entries {
-		if e := ctx.Err(); e != nil {
-			return e
+	// Pipelined read-only checks hide network latency without parallel deletion.
+	workers := 1
+	if remote {
+		var err error
+		workers, err = s.planningWorkers()
+		workers = min(workers, batchWorkers)
+		if err != nil {
+			return err
 		}
-		if e := unchangedRemoval(s, r, remote, true); e != nil {
-			return e
+	}
+	if p != nil {
+		p.mu.Lock()
+		p.removing, p.checking, p.finished = true, true, false
+		p.total, p.completed, p.current = 0, 0, 0
+		p.files, p.doneFiles, p.checked = len(entries), 0, 0
+		p.phase, p.name, p.lastChange = "Checking selection before deletion", "", time.Now()
+		p.mu.Unlock()
+	}
+	err := parallelFilesN(len(entries), workers, func(i int) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+		r := entries[i]
+		if err := unchangedRemoval(s, r, remote, true); err != nil {
+			return err
+		}
+		if p != nil {
+			p.mu.Lock()
+			p.checked++
+			p.name = r.name
+			p.lastChange = time.Now()
+			p.mu.Unlock()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if p != nil {
+		p.mu.Lock()
+		p.checking = false
+		p.phase = "Deleting"
+		p.lastChange = time.Now()
+		p.mu.Unlock()
 	}
 	dirs := map[string]removalEntry{}
 	for _, r := range entries {
@@ -191,6 +268,7 @@ func executeRemoval(ctx context.Context, s *SFTP, entries []removalEntry, remote
 				p.phase = "Deleting"
 			}
 			p.name = r.name
+			p.lastChange = time.Now()
 			p.log(" − "+safeText(r.name), false)
 			p.mu.Unlock()
 		}

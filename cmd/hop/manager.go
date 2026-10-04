@@ -20,6 +20,8 @@ type managerAction struct {
 }
 type dualManager struct {
 	settings                       bool
+	details                        string
+	detailOffset                   int
 	settingsCursor, settingsOffset int
 	settingsEdit                   bool
 	settingsText, settingsError    string
@@ -207,7 +209,7 @@ func runManager(o Options) error {
 			if e != nil && !errors.Is(e, errCancelled) {
 				d.notice = e.Error()
 			}
-		case "machine", "connect":
+		case "machine", "connect", "reconnect":
 			next := action.host
 			var e error
 			if action.kind == "machine" {
@@ -225,6 +227,15 @@ func runManager(o Options) error {
 				}
 				next = withOverrides(next, o.SSH)
 			}
+			if action.kind == "reconnect" {
+				if s != nil {
+					s.Close()
+				}
+				closeConnection()
+				s, d.sftp = nil, nil
+				d.loaders[1] = func(string) ([]FileItem, error) { return nil, errors.New("not connected; press o to reconnect") }
+				d.mkdir[1] = func(string) error { return errors.New("not connected; press o to reconnect") }
+			}
 			connection, newHome, newCancel, e := managerConnect(next)
 			if e != nil {
 				d.notice = "Connection failed: " + e.Error()
@@ -238,15 +249,21 @@ func runManager(o Options) error {
 			s = connection
 			d.host = next
 			d.connection = [5]string{}
-			d.transfer = nil
+			if action.kind != "reconnect" {
+				d.transfer = nil
+			}
 			d.sftp = s
 			d.homes[1] = newHome
-			d.panes[1] = newBrowserModel(Browser{Current: newHome, Sort: o.Sort})
-			d.panes[1].hideDotfiles = true
+			if action.kind != "reconnect" {
+				d.panes[1] = newBrowserModel(Browser{Current: newHome, Sort: o.Sort})
+				d.panes[1].hideDotfiles = true
+			}
 			d.loaders[1] = remoteFileLoader(s)
 			current := s
 			d.mkdir[1] = func(p string) error { return current.Mkdir(p, 0755) }
-			d.notice = "Connected to " + next.Label()
+			if action.kind != "reconnect" {
+				d.notice = "Connected to " + next.Label()
+			}
 		}
 	}
 }
@@ -353,6 +370,9 @@ func demoManager(order SortOrder) error {
 }
 
 func managerKey(data []byte) (string, int) {
+	if len(data) > 0 && len(data) < len(pasteStart) && strings.HasPrefix(pasteStart, string(data)) {
+		return "", 0
+	}
 	if len(data) > 0 {
 		switch data[0] {
 		case 9:
@@ -374,7 +394,7 @@ func (d *dualManager) selectedAction() managerAction {
 	files := m.selected()
 	if len(files) == 0 {
 		v := m.visible()
-		if m.cursor < len(v) && markable(v[m.cursor]) {
+		if m.cursor >= 0 && m.cursor < len(v) && markable(v[m.cursor]) {
 			files = []FileItem{v[m.cursor]}
 		}
 	}

@@ -70,33 +70,36 @@ type Entry struct {
 	Attr Attr
 }
 type SFTP struct {
-	batchCommand   func(context.Context) *exec.Cmd
-	host           Host
-	scanCommand    func(context.Context) *exec.Cmd
-	deltaHash      func(context.Context, string, uint64, uint64) ([]byte, error)
-	deltaTransfers atomic.Uint64
-	deltaReused    atomic.Uint64
-	externalOnce   sync.Once
-	externalCtx    context.Context
-	externalCancel context.CancelFunc
-	rsyncOnce      sync.Once
-	rsyncCap       *rsyncCapability
-	limitsOnce     sync.Once
-	limits         transferLimits
-	limitsErr      error
-	in             io.WriteCloser
-	out            io.Reader
-	cmd            *exec.Cmd
-	id             uint32
-	mu             sync.Mutex
-	writeMu        sync.Mutex
-	readerOnce     sync.Once
-	pending        map[uint32]sftpPending
-	failure        error
-	ext            map[string]string
-	closeOnce      sync.Once
-	abortOnce      sync.Once
-	timeout        time.Duration
+	removalScanCommand func(context.Context) *exec.Cmd
+	batchCommand       func(context.Context) *exec.Cmd
+	uploadCommand      func(context.Context) *exec.Cmd
+	uploadCheckCommand func(context.Context) *exec.Cmd
+	host               Host
+	scanCommand        func(context.Context) *exec.Cmd
+	deltaHash          func(context.Context, string, uint64, uint64) ([]byte, error)
+	deltaTransfers     atomic.Uint64
+	deltaReused        atomic.Uint64
+	externalOnce       sync.Once
+	externalCtx        context.Context
+	externalCancel     context.CancelFunc
+	rsyncOnce          sync.Once
+	rsyncCap           *rsyncCapability
+	limitsOnce         sync.Once
+	limits             transferLimits
+	limitsErr          error
+	in                 io.WriteCloser
+	out                io.Reader
+	cmd                *exec.Cmd
+	id                 uint32
+	mu                 sync.Mutex
+	writeMu            sync.Mutex
+	readerOnce         sync.Once
+	pending            map[uint32]sftpPending
+	failure            error
+	ext                map[string]string
+	closeOnce          sync.Once
+	abortOnce          sync.Once
+	timeout            time.Duration
 }
 
 func sshArgs(h Host) []string {

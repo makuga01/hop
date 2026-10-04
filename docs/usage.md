@@ -67,14 +67,24 @@ These shortcuts apply when a text field isn't active.
 | `o` | Settings and connection options |
 | `h` or `?` | Scrollable shortcut reference |
 | `q` | Quit |
-| Ctrl-C | Cancel the active operation, or quit when idle |
+| Esc (during an operation) | Stop and keep Hop open; reconnect if needed |
+| Ctrl-C | Stop active work and quit |
 
 Type `dd` or `gg` within one second. In a text field or confirmation prompt,
 Esc closes that first. With no selections, Esc clears the filter or status message.
 Press Enter or Esc to leave a filter field; the filter stays until cleared.
 
 Each panel keeps its own cursor, sorting, selections, and current folder.
-Selections survive folder changes. The selection box lists exactly what will be copied.
+Selections survive folder changes. The selection box previews the marked items and
+reports how many are outside the current view. Esc clears all marks in the active panel.
+Refreshing a folder removes marks for entries that no longer exist in that folder.
+
+Paste text into the path, filter, or connection fields. In terminals supporting
+bracketed paste, pasted text never executes file commands or confirms a dialog.
+
+The top buttons show their keyboard shortcuts: `b` Machine, `c` Copy, `n` New folder,
+`R` Refresh, `.` Hidden, and `o` Options. These shortcuts work in normal mode;
+letters typed into a text field enter text. `R` is uppercase (`r` opens recent paths).
 
 ## Mouse
 
@@ -101,27 +111,26 @@ Destination checks and transfer-time validation still apply.
 
 When filenames conflict, choose **Replace** for that transfer, **Options** to change
 the session's overwrite setting, or **Cancel**. Folder contents merge.
-Copies of at least 256 MiB or 200 items ask for confirmation before starting.
+Copies start after the selection and destination checks; size alone does not
+trigger an extra confirmation. The one-shot CLI copy can use `--yes` to skip its
+final summary prompt after preflight.
 
 Confirmation dialogs support arrow keys and Tab to select a button. The selected
 button is highlighted and marked with `> … <`. Enter activates that button;
 Esc cancels. Clicking a button activates that exact action.
 
-For new downloads and confirmed small-file replacements (up to 1 MiB), Hop can
-stream a batch over one SSH connection using an existing Python 3, when at least
-32 files qualify. Each file carries a
-SHA-256 checksum. New or changed files are synced to temporary local files and
-committed atomically. Existing destinations require explicit replacement
-authorization; identical file contents are compared and left
-in place without rewriting. Existing small-file SHA-256 hashes are sent first,
-so identical contents are not downloaded again. The stream uses gzip in both
-directions, including the request list. New large files use bounded buffers and
-temporary files;
-existing large files keep the delta/SFTP path. Repeated remote file identities
-can reuse an already verified local copy, with another checksum check and a
-separate destination file. The progress panel shows whether Stream or SFTP is
-active. If the helper is unavailable before streaming begins, Hop falls back to
-SFTP. An interrupted stream stops the batch; files already committed remain, as with ordinary copies.
+Eligible batches stream through one compressed SSH connection using Python 3
+already on the server. Downloads use zstd when available, otherwise gzip; uploads
+use gzip. No remote tools or temporary archives are installed or created.
+Each file is verified with SHA-256 before publication. Identical destination files
+can be left in place, and changed large files can reuse matching blocks.
+The progress panel shows the active backend, effective speed, and an approximate
+ETA once the rate is stable. See [transfer details and measurements](performance.md).
+
+Esc stops an operation without quitting Hop. A stopped remote operation closes
+its connection to interrupt outstanding requests, then reconnects to the same
+machine with the panels preserved. It does not restart the transfer. Files already
+committed or deleted remain changed; cancellation does not roll them back.
 
 A move copies and verifies the whole selection before removing the sources. Failed
 copies leave the sources in place. Changes to the source after scanning stop removal.
@@ -133,14 +142,15 @@ already be gone. Moves and deletes always require confirmation.
 ```sh
 hop my-server --dry-run     # Preview operations without changing files
 hop my-server --overwrite   # Allow replacing destination files
-hop my-server --yes         # Skip large-copy confirmation (not move/delete confirmation)
 ```
 
-SFTP transfers overlap requests and copy multiple files concurrently. Eligible
-download batches use a separate compressed SSH stream. Uploads, existing large
-files, and servers without the helper use SFTP, with native delta reuse where
-available. No remote software installation is required.
-If a connection or transfer fails, the panels stay open with Retry and Options available.
+SFTP remains the fallback when a stream helper is unavailable before transfer.
+SFTP requests and file copies overlap to reduce network round trips.
+
+After an error, **Details** opens the full message with scrolling. **Retry** is
+available for failed scans. After execution has started, review the refreshed
+panels and select the next operation; Hop does not blindly repeat a partially
+completed move or deletion. **Options** lets you reconnect or change settings.
 
 ## Faster repeat transfers
 
@@ -151,7 +161,8 @@ replacing the destination. No rsync or remote installation is needed.
 The fast path needs noninteractive SSH with a POSIX shell and either Python 3
 or `dd` plus `sha256sum`, `shasum`, or OpenSSL. Upload reuse also needs the
 server's `copy-data` SFTP extension. Missing capabilities fall back to ordinary
-pipelined SFTP, including on SFTP-only servers. Fresh files use SFTP directly.
+pipelined SFTP, including on SFTP-only servers. Eligible fresh files can use the
+compressed stream without a delta check.
 
 Block signatures start at 64 KiB. When Python is available, a rolling checksum
 search can reuse data shifted by insertions or deletions; SHA-256 confirms every
@@ -165,7 +176,7 @@ not look for or run rsync by default.
 
 ## Settings, history, and themes
 
-Press `o` to change overwrite behavior, copy confirmations, preview mode, remote history,
+Press `o` to change overwrite behavior, preview mode, remote history,
 theme, or sorting. You can also edit the SSH destination, port, identity file, jump host,
 and config file, then reconnect.
 

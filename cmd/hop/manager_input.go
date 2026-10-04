@@ -12,10 +12,13 @@ import (
 )
 
 type paneResult struct {
-	side    int
-	listing browserListing
-	focused string
-	created bool
+	side              int
+	listing           browserListing
+	focused           string
+	query             string
+	created           bool
+	editing, creating bool
+	edit              string
 }
 
 func (d *dualManager) Run() (managerAction, error) {
@@ -32,6 +35,8 @@ func (d *dualManager) Run() (managerAction, error) {
 		return managerAction{}, err
 	}
 	leave := enterPickerScreen(tty, true)
+	fmt.Fprint(tty, "\x1b[?2004h")
+	defer fmt.Fprint(tty, "\x1b[?2004l")
 	defer func() { leave(); _, _ = stty(tty, old) }()
 	keys := make(chan []byte, 8)
 	done := make(chan struct{})
@@ -80,7 +85,10 @@ func (d *dualManager) Run() (managerAction, error) {
 		if m.loading {
 			return
 		}
-		focus := ""
+		focus, query := "", ""
+		if target == m.current {
+			query = m.query
+		}
 		v := m.visible()
 		if m.cursor >= 0 && m.cursor < len(v) && target == m.current {
 			focus = v[m.cursor].Path
@@ -88,8 +96,9 @@ func (d *dualManager) Run() (managerAction, error) {
 		m.loading = true
 		m.notice = ""
 		loader, mkdir := d.loaders[side], d.mkdir[side]
+		editText, wasEditing := m.edit, m.editing
 		go func() {
-			r := paneResult{side: side, focused: focus, listing: browserListing{Target: path.Clean(target)}}
+			r := paneResult{side: side, focused: focus, query: query, editing: wasEditing, creating: create, edit: editText, listing: browserListing{Target: path.Clean(target)}}
 			if create {
 				r.listing.Err = mkdir(target)
 				r.created = r.listing.Err == nil
@@ -129,6 +138,7 @@ func (d *dualManager) Run() (managerAction, error) {
 	tick := time.NewTicker(150 * time.Millisecond)
 	defer tick.Stop()
 	var pending []byte
+	var paste terminalPaste
 	for {
 		select {
 		case <-tick.C:
@@ -140,7 +150,13 @@ func (d *dualManager) Run() (managerAction, error) {
 				draw()
 			}
 		case r := <-transferResults:
-			if d.copyResult(r, transferResults) {
+			stopped := d.transfer.stopping
+			reconnect := stopped && (d.transfer.action.kind != "delete" || d.transfer.action.side == 1)
+			changed := d.copyResult(r, transferResults)
+			if reconnect {
+				return managerAction{kind: "reconnect", host: d.host}, nil
+			}
+			if changed {
 				for i, p := range d.panes {
 					load(i, p.current, false)
 				}
@@ -156,7 +172,13 @@ func (d *dualManager) Run() (managerAction, error) {
 			m := d.panes[r.side]
 			before := m.current
 			m.apply(r.listing)
+			if r.listing.Err != nil && r.editing && !r.created {
+				m.editing, m.creating, m.edit = true, r.creating, r.edit
+			} else if r.editing {
+				m.editing, m.creating = false, false
+			}
 			if r.listing.Err == nil {
+				m.query = r.query
 				m.recent = append([]FileItem{{Name: before, Path: before, Dir: true}}, m.recent...)
 				if len(m.recent) > 50 {
 					m.recent = m.recent[:50]
@@ -170,7 +192,7 @@ func (d *dualManager) Run() (managerAction, error) {
 				if r.created {
 					d.notice = "Folder created: " + r.listing.Target
 				}
-			} else if len(m.items) == 0 && m.current != d.homes[r.side] {
+			} else if !r.editing && len(m.items) == 0 && m.current != d.homes[r.side] {
 				d.notice = m.notice
 				load(r.side, d.homes[r.side], false)
 			}
@@ -178,6 +200,18 @@ func (d *dualManager) Run() (managerAction, error) {
 		case data := <-keys:
 			pending = append(pending, data...)
 			for len(pending) > 0 {
+				if key, handled := paste.read(&pending); handled {
+					if key == "" {
+						break
+					}
+					if key == "paste-too-large" {
+						d.notice = "Paste too long · maximum 64 KiB; nothing inserted"
+					} else {
+						d.pasteText(strings.TrimPrefix(key, "paste:"))
+					}
+					draw()
+					continue
+				}
 				key, n := managerKey(pending)
 				if n == 0 {
 					select {
@@ -185,13 +219,27 @@ func (d *dualManager) Run() (managerAction, error) {
 						pending = append(pending, more...)
 						continue
 					case <-time.After(60 * time.Millisecond):
+						if len(pending) > 1 && strings.HasPrefix(pasteStart, string(pending)) {
+							break
+						}
 						key = "esc"
 						n = len(pending)
 					}
 				}
+				if n == 0 {
+					break
+				}
 				pending = pending[n:]
 				if _, mouse := parseMouse(key); !mouse {
 					d.clickPath = ""
+				}
+				if d.details != "" {
+					if key == "quit" {
+						return managerAction{kind: "quit"}, nil
+					}
+					d.detailsKey(key, h)
+					draw()
+					continue
 				}
 				if d.settings {
 					if action, done := d.settingsKey(key, w, h); done {
@@ -308,6 +356,9 @@ func (d *dualManager) Run() (managerAction, error) {
 				}
 				m := d.panes[d.active]
 				if m.editing {
+					if m.loading {
+						continue
+					}
 					switch key {
 					case "esc":
 						m.editing = false
@@ -332,10 +383,9 @@ func (d *dualManager) Run() (managerAction, error) {
 								break
 							}
 						}
-						m.editing = false
-						create := m.creating
-						m.creating = false
-						load(d.active, target, create)
+						if !m.loading {
+							load(d.active, target, m.creating)
+						}
 					default:
 						if strings.HasPrefix(key, "text:") {
 							m.edit += key[5:]
@@ -375,7 +425,7 @@ func (d *dualManager) Run() (managerAction, error) {
 						d.notice = "Not connected · o Options to reconnect"
 						break
 					}
-					if d.panes[0].loading || d.panes[1].loading {
+					if m.loading || (key != "delete" && d.panes[1-d.active].loading) {
 						d.notice = "Wait for both folders to finish loading"
 						break
 					}
@@ -383,14 +433,14 @@ func (d *dualManager) Run() (managerAction, error) {
 					a.kind = key
 					if len(a.files) > 0 {
 						if d.demo {
-							d.notice = "Demo mode · no files copied"
+							d.notice = "Demo mode · no files changed"
 							break
 						}
 						d.filtering[d.active] = false
 						d.beginCopy(a, transferResults)
 						break
 					}
-					d.notice = "Mark a file or folder with Space first"
+					d.notice = "Choose a file or folder; Space marks multiple items"
 				case "refresh":
 					for i, p := range d.panes {
 						load(i, p.current, false)

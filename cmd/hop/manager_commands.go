@@ -103,7 +103,7 @@ func (d *dualManager) filterKey(key string) bool {
 
 var managerCommands = [][2]string{
 	{"o / Options button", "Session and SSH settings"},
-	{"r (after an error)", "Retry the same operation"},
+	{"r (scan error)", "Rescan selection; Details shows the full error"},
 	{"←/→ · Tab (dialog)", "Choose an action; highlighted button is selected"},
 	{"Enter / Esc (dialog)", "Activate selected action / cancel"},
 	{"/ · click Filter", "Focus filter; type to match names"},
@@ -120,7 +120,6 @@ var managerCommands = [][2]string{
 	{"c / y · Ctrl-S / Ctrl-T", "Copy to opposite panel"},
 	{"m", "Move to opposite panel; confirms"},
 	{"dd / D", "Delete selection; always confirms"},
-	{"Enter (confirmation)", "Perform operation; Esc cancels"},
 	{"n / Ctrl-N", "Create and open folder"},
 	{"P / Ctrl-L", "Edit current path"},
 	{"b / Ctrl-B", "Choose SSH machine"},
@@ -132,7 +131,8 @@ var managerCommands = [][2]string{
 	{"Click / double-click", "Move cursor / open folder"},
 	{"Click/drag scrollbar", "Scroll active pane"},
 	{"h / ?", "Show this command table"},
-	{"q / Ctrl-C", "Quit; Ctrl-C cancels active work"},
+	{"Esc (during work)", "Stop operation and keep Hop open"},
+	{"q / Ctrl-C", "Quit; Ctrl-C stops active work and quits"},
 }
 
 func (d *dualManager) helpView(w, h int) string {

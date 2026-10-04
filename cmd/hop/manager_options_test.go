@@ -70,14 +70,14 @@ func TestSessionOptions(t *testing.T) {
 	defer applyTheme(theme)
 	d := managerFixture()
 	d.openSettings()
-	for _, i := range []int{0, 1, 2, 3, 4} {
+	for _, i := range []int{0, 1, 2, 3} {
 		d.settingsCursor = i
 		d.settingsKey("enter", 110, 28)
 	}
-	if !d.options.Overwrite || !d.options.DryRun || !d.readonly || !d.options.Yes || !d.options.NoHistory || themePreference == theme {
+	if !d.options.Overwrite || !d.options.DryRun || !d.readonly || !d.options.NoHistory || themePreference == theme {
 		t.Fatal("session options did not apply")
 	}
-	d.settingsCursor = 8
+	d.settingsCursor = 7
 	d.settingsKey("enter", 110, 28)
 	d.settingsText = "70000"
 	d.settingsKey("enter", 110, 28)
@@ -88,7 +88,7 @@ func TestSessionOptions(t *testing.T) {
 	d.settingsKey("enter", 110, 28)
 	d.connection[0] = "user@example.com"
 	d.connection[2] = "/tmp/key with spaces"
-	d.settingsCursor = 12
+	d.settingsCursor = 11
 	a, done := d.settingsKey("enter", 110, 28)
 	if !done || a.kind != "connect" || a.host.Target != "user@example.com" {
 		t.Fatal(a)

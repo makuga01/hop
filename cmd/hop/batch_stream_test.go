@@ -28,7 +28,7 @@ func TestStreamDownloads(t *testing.T) {
 			s.batchCommand = func(ctx context.Context) *exec.Cmd { return exec.CommandContext(ctx, python, "-c", script) }
 			source, dest := t.TempDir(), t.TempDir()
 			plan := CopyPlan{Destination: dest, remoteReadChecked: true}
-			for i := 0; i < 40; i++ {
+			for i := 0; i < 160; i++ {
 				name := fmt.Sprintf("file %d", i)
 				body := strings.Repeat(fmt.Sprint(i), 200)
 				if i <= 1 {
@@ -292,6 +292,46 @@ func BenchmarkStreamCommit(b *testing.B) {
 				}
 			}
 			b.ReportMetric(512, "files/op")
+		})
+	}
+}
+
+func TestStreamStagedDestinationChanges(t *testing.T) {
+	for _, kind := range []string{"fresh", "replace", "identical"} {
+		t.Run(kind, func(t *testing.T) {
+			to := filepath.Join(t.TempDir(), "file")
+			if kind != "fresh" {
+				data := "old"
+				if kind == "identical" {
+					data = "new contents"
+				}
+				if err := os.WriteFile(to, []byte(data), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p := &pendingStreamFile{to: to, data: []byte("new contents"), mode: 0600, replace: kind != "fresh"}
+			defer p.cleanup()
+			if err := p.prepare(); err != nil {
+				t.Fatal(err)
+			}
+			if err := syncStreamBatch(context.Background(), []*pendingStreamFile{p}); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(to, []byte("concurrent change must survive"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.publish(); err == nil {
+				t.Fatal("concurrent destination change accepted")
+			}
+			got, err := os.ReadFile(to)
+			if err != nil || string(got) != "concurrent change must survive" {
+				t.Fatal("concurrent destination overwritten", err)
+			}
+			p.cleanup()
+			partial, _ := filepath.Glob(filepath.Join(filepath.Dir(to), ".hop-*.partial"))
+			if len(partial) != 0 {
+				t.Fatal("staged file leaked")
+			}
 		})
 	}
 }

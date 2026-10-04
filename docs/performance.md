@@ -515,3 +515,257 @@ MB/s** with one stream and **0.741 MB/s** with four concurrent streams, includin
 connection overhead. This is observed throughput for those probes, not a fixed
 network limit. Compression and reuse improve effective throughput, but short-term
 rates vary substantially across this tree; early ETAs are not reliable benchmarks.
+
+## Batched small-file commits — October 3, 2026
+
+The download stream now prepares bounded batches of up to 64 files or about
+8 MiB of buffered payload, with a 100 ms maximum collection delay. Writes,
+synchronization and publication run as separate phases. References to pending
+files request an immediate flush, so they do not wait for the batch to fill.
+
+On macOS APFS/HFS, every changed file first passes `fsync`, followed by one
+`F_FULLFSYNC` drive-cache barrier per filesystem device in the batch. Only then
+are files closed and published. This follows Apple's documented distinction
+between [file synchronization and flushing the drive cache](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/fsync.2.html).
+Other filesystems and operating systems retain a full `File.Sync` per file.
+Checksums, overwrite revalidation, no-clobber creation and temporary-file cleanup
+remain enabled. A failed sync prevents publication of the pending batch.
+
+One sequential live comparison used the existing synthetic Replace fixture:
+4,096 small files split between identical, changed and missing destinations,
+plus one new large file (4,097 files / 74.25 MiB). Both runs checked every result
+against the generated contents and removed the remote fixture.
+
+| Implementation | Copy time |
+| --- | ---: |
+| v0.3.0, immediate per-file commits | 17.472 s |
+| Separate write/sync/publication phases, per-file full sync | 10.634 s |
+| Batched device barriers on APFS | 7.020 s |
+
+The final run was about 2.5× faster than v0.3.0 on this compressible fixture.
+These are single runs, not an expected speedup for arbitrary project data.
+Planning, fixture setup and independent content checks are outside the timer.
+
+A subsequent comparison downloaded the same stable dependency tree from an
+authorized live project: **18,791 files / 353,893,595 bytes**, with matching
+counts and sizes in both runs. Each run used its own temporary local destination
+and the stream's SHA-256 verification; the source was not modified. v0.3.0 took
+**154.787 s**, and the batched implementation took **94.274 s**, about **39% less
+time (1.64× faster)**. Planning was approximately one second, outside these
+copy times. This is one sequential comparison on the measured connection,
+not a controlled-bandwidth or cold-cache benchmark. Both temporary copies
+were removed.
+
+Tests cover source references across batches, cancellation, malformed frames,
+concurrent destination changes (including identical files), and injected
+file-sync/device-barrier failures. Publication is forbidden before synchronization.
+
+### Transport investigation
+
+Short SSH probes varied considerably across connections. Changing `IPQoS` and
+opening independent connections did not reliably reproduce their apparent gains
+in complete transfers, so those experimental settings were **not retained**.
+One raw 64 MiB download, without Hop, took 86.3 s and settled near 0.75 MB/s.
+The server reported 1,128 retransmitted TCP segments and a roughly 46 ms RTT
+near its end. This is evidence of a transport problem during that run, not a
+measurement of the user's available Internet bandwidth or proof of its cause.
+
+
+## Zstandard and unchanged large replacements — October 4, 2026
+
+The same authorized stable dependency tree (18,791 files, 981 directories,
+353,893,595 logical bytes) was measured again. All runs used isolated temporary
+local destinations. Replace runs seeded those destinations from the same existing
+local copy; seed creation is outside the timer. Neither original tree was modified.
+
+| Workload | Previous local build (gzip, batched commits) | This pass |
+| --- | ---: | ---: |
+| Fresh download | 94.274 s | 61.479 s |
+| Replace existing matching tree | 10.548 s | 5.783 s |
+
+These are single sequential observations on a variable live connection, not
+controlled-bandwidth benchmarks. Copy times include local checksum preparation,
+transfer, verification and commits; planning (roughly 0.7–1 second), connection
+setup and fixture setup are excluded. Fresh and Replace are different workloads:
+the 5.783-second result mostly checks data already present locally. Temporary
+copies were removed after completion.
+
+- Download streaming prefers Zstandard when Python's `compression.zstd` module
+  or the `zstd` executable is already available remotely. It installs nothing.
+  Hosts without either retain gzip level 1; hosts without Python retain SFTP.
+  The local decoder is compiled into Hop and has bounded memory/window limits.
+- Zstandard level 9 reduced the compressed unique-inode payload in a separate
+  remote compression probe from 53,961,603 bytes (gzip level 1) to 40,266,397 bytes.
+  That probe excludes protocol framing and is not the whole-transfer wire count.
+  Its compression CPU/wall time increased from 2.751 to 5.032 seconds. Level 9
+  trades CPU for fewer network bytes and may be slower on fast LANs or weak CPUs.
+- Authorized large replacements now participate in whole-file SHA-256 comparison.
+  Matching files are rechecked locally and retain their existing inode and data;
+  source permissions are applied through a checked file handle. Changed large
+  files remain unfinished by the stream and continue through native delta/SFTP.
+- Eight local workers prepare replacement hashes. The request carries each
+  distinct hash once and refers to it by index, reducing repeated manifest data.
+  Source checks, per-file checksums and destination revalidation remain enabled.
+
+The fresh run measured the codec change; the final Replace run also includes
+parallel hashing and the deduplicated hash manifest. Local regression tests cover
+fresh copies, changed/unchanged large replacements, references to deferred files,
+codec failures/truncation, destination changes and cancellation.
+
+
+### Longer compression history and corrected ETA — October 4, 2026
+
+A further fresh download of the same 18,791-file / 353,893,595-byte tree took
+**50.336 seconds** with a 64 MiB Zstandard history and long-distance matching,
+compared with the preceding 61.479-second observation. These remain single runs
+on a variable live connection. All files passed the normal stream checksum and
+commit checks; the isolated destination was removed.
+
+A local compression-only comparison concatenated identical unique file contents
+from that existing tree, in sorted traversal order: 139,041,439 bytes before
+compression. Level 9 with the default history produced 40,397,080 bytes in
+1.320 seconds; level 9 with long-distance matching and a 64 MiB history produced
+34,360,147 bytes in 1.141 seconds. These are local CPU measurements, exclude file
+framing, and do not imply that every host or workload compresses faster. Larger
+histories and level 12 were also examined; the shipped setting keeps level 9
+and the 64 MiB history to limit CPU and memory costs. Python's optional native
+[advanced compression parameters](https://docs.python.org/3.14/library/compression.zstd.html#advanced-parameter-control)
+and the existing zstd command use the same settings. The local decoder rejects
+windows over 64 MiB and sets its decoder memory limit to 128 MiB; other transfer
+buffers and application memory are additional.
+
+An independent diagnostic separated the preceding codec's network stage from
+local replay: receiving its 40,764,363-byte wire stream took 87.032 seconds;
+the whole copy took 95.929 seconds. Feeding the captured stream into the local
+receiver took 6.165 seconds, with remaining time spent on commits and orchestration.
+The diagnostic buffered the entire stream solely to separate these measurements;
+normal transfers still decompress and write while downloading. This identifies
+transport as the dominant cost in that run, not a fixed available-bandwidth limit.
+
+ETA no longer extrapolates all remaining file counts from the last few completed
+files while bytes remain. One large file had made that estimate grow beyond a day.
+The displayed effective rate uses approximately five seconds of history; the
+approximate byte-based ETA uses up to twenty seconds. Startup, stalls and sharp
+rate changes suppress the estimate, and changing backends resets its history.
+Final commits with all bytes received do not extrapolate the earlier file rate.
+All-empty selections retain a file-based estimate. Regression tests cover the
+large-file/many-small-files case, startup, stalls, retries and backend changes.
+
+
+## Upload streaming and destination checks — October 4, 2026
+
+Uploads now aggregate at least 32 eligible files, or a fresh file of at least
+8 MiB, into one gzip-compressed SSH stream. Python 3 on a compatible POSIX host
+receives explicit byte-safe destination paths and bounded file chunks. No helper
+is installed and no complete intermediate archive is created. Unsupported hosts
+retain SFTP. Existing files over 1 MiB retain native delta/SFTP instead of losing
+block reuse. Authorized small replacements use the stream.
+
+Before the sender emits each checksum, it rechecks the local source's identity,
+size and modification time. The receiver validates SHA-256, writes exclusive
+temporary files relative to open parent-directory descriptors, and synchronizes
+bounded groups of up to 32 files or 8 MiB (one large file may exceed that byte
+threshold). Eight persistent workers handle remote fsync. Acknowledgements follow
+successful no-clobber creation or authorized atomic replacement, including checks
+for concurrent destination and parent changes. EOF, process success and all
+acknowledgements are required for overall success; a failed copy cannot authorize
+source removal. Cancellation closes input so the receiver can clean staging files,
+with a bounded shutdown timeout. Cleanup remains best effort after hard process,
+connection or filesystem failures.
+
+A read-only helper also batches upload destination metadata checks. It validates
+that the shell and SFTP resolve the destination root to the same canonical path.
+Malformed/unavailable helpers fall back to the original SFTP checks; symlink and
+overwrite checks remain active. The write helper repeats namespace validation
+before creating any file. Folder creation and final directory permissions still
+use the existing ordered SFTP implementation.
+
+Live tests used generated fixtures in unique remote temporary directories on an
+authorized Linux host. All uploaded files were independently checked with SHA-256,
+and remote cleanup was verified. Each figure is a single run on a variable link:
+
+| Generated workload | SFTP copy | Stream copy |
+| --- | ---: | ---: |
+| 2,048 text files, 32,768,000 bytes | 165.251 s | 6.704 s |
+| 128 random files, 2,048,000 bytes | 48.864 s | 20.180 s |
+
+The text fixture compresses very well, so its ratio is not representative of
+incompressible content. These copy times exclude planning, fixture generation,
+independent final verification and SSH setup. The later random-data comparison
+uses the final destination-check helper and verifies that gains also occur without
+compression savings; link conditions differed from the preceding text comparison.
+
+After adding persistent sync workers and avoiding a 256 KiB allocation for every
+small file, a final text-fixture run completed in **4.876 seconds**, with **0.405
+seconds** of planning. It passed independent checksums and verified cleanup. The
+original 165.251-second SFTP observation was not rerun alongside this final pass.
+
+Reproduce against an authorized test host:
+
+```sh
+HOP_UPLOAD_HOST=your-test-host go test ./cmd/hop \
+  -run '^TestLiveUploadStream$' -v -count=1 -timeout 8m
+HOP_UPLOAD_HOST=your-test-host HOP_UPLOAD_COUNT=128 HOP_UPLOAD_RANDOM=1 \
+  go test ./cmd/hop -run '^TestLiveUploadStream$' -v -count=1 -timeout 3m
+```
+
+`HOP_UPLOAD_BACKEND=native` or `sftp` limits the benchmark to one copy path.
+Normal test runs do not contact SSH machines. Tests cover replacements, new large
+files, empty files, unusual names, source changes, corruption, destination races,
+symlinks, namespace mismatch, sync failures, cancellation cleanup and metadata
+fallback. The full race suite and vet passed; macOS ARM64 and Linux AMD64 build.
+
+### Download parallelism experiment
+
+Four compressed streams on the existing shared SSH connection took 57.210 seconds
+for the stable 18,791-file / 353,893,595-byte download tree. Four independent SSH
+connections took 48.830 seconds, compared with the preceding single-stream
+50.336-second observation. That small difference on a variable connection does
+not justify extra connections and memory. Neither experiment was retained in
+production; the single-stream download remains in place.
+
+
+## Scanning before deletion — October 4, 2026
+
+The deletion review previously performed a sequential SFTP `lstat` for every
+entry, plus directory listings. A separate read-only Python helper now walks the
+selected roots on the host using `scandir` and `stat(follow_symlinks=False)` and
+streams compressed metadata. It never removes files or follows directory links.
+The client checks the shell/SFTP parent namespace and root metadata, validates
+parent/child relationships and selection boundaries, rejects incomplete/oversized
+manifests, and constructs a postorder plan. Existing deletion revalidation and
+individual removal operations still execute after confirmation.
+
+If the helper is unavailable, the SFTP walk reuses complete attributes already
+returned by directory listings. Missing size/mode/time attributes still trigger
+an explicit `lstat`. The deletion dialog now shows elapsed time and live file and
+folder counts; cancellation stops the helper. Move planning uses this scanner too.
+
+One live comparison scanned a generated tree of 512 regular files, one broken
+symlink, 16 subdirectories and its root (530 entries):
+
+| Scan | Time |
+| --- | ---: |
+| Previous per-entry SFTP stat walk | 31.621 s |
+| New remote metadata helper | 0.322 s |
+
+Both plans contained the same paths, modes, sizes, times and directory children.
+A separate larger generated fixture with 23,541 regular files, one broken symlink,
+1,024 subdirectories and its root (24,567 entries) scanned in **0.950 seconds**.
+The larger fixture did not run the slow baseline. These are single observations
+on one live connection; they measure planning before confirmation, not deletion.
+The fixtures were checked to remain present after scanning, then their unique
+test directories were cleaned up and cleanup verified.
+
+Local tests cover symlink targets, overlapping selections, postorder plans,
+changed sources, cancellation, namespace mismatch, unavailable helpers, malformed
+manifests and listing-attribute reuse. The existing deletion and Move safeguards
+are exercised against the new plans as well.
+
+```sh
+HOP_REMOVAL_HOST=your-test-host go test ./cmd/hop \
+  -run '^TestLiveRemovalScan$' -v -count=1 -timeout 4m
+HOP_REMOVAL_HOST=your-test-host HOP_REMOVAL_COUNT=23541 \
+  HOP_REMOVAL_DIRS=1024 HOP_REMOVAL_BASELINE=0 go test ./cmd/hop \
+  -run '^TestLiveRemovalScan$' -v -count=1 -timeout 3m
+```

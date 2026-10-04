@@ -16,9 +16,10 @@ def drain():
  return True
 def wait(text):
  global cursor
- target=text.encode();end=time.monotonic()+15
+ target=text;end=time.monotonic()+15
  while time.monotonic()<end:
-  at=data.find(target,cursor)
+  plain=ansi.sub('',data.decode(errors='replace'))
+  at=plain.find(target,cursor)
   if at>=0:cursor=at+len(target);return
   if not drain():break
  raise AssertionError(f'Missing {text}: {data.decode(errors="replace")}')
@@ -28,12 +29,13 @@ def ready():
  while time.monotonic()<end:
   frame=bytes(data).decode(errors='replace').rsplit('\x1b[H',1)[-1]
   plain=ansi.sub('',frame)
-  if 'LOCAL' in plain and 'REMOTE' in plain and 'remote.txt' in plain and 'alpha.txt' in plain and 'Loading' not in plain and 'h Help' in plain:
-   cursor=len(data);return
+  if 'LOCAL' in plain and 'REMOTE' in plain and 'Loading' not in plain and 'h Help' in plain:
+   cursor=len(ansi.sub('',bytes(data).decode(errors='replace')));return
   if not drain():break
  raise AssertionError('panels did not finish loading')
 try:
  ready()
+ os.write(master,b'\x1b[200~D\r\x1b[201~');wait('Paste into a field')
  os.write(master,b'h');wait('Commands')
  os.write(master,b'\x1b');ready()
  os.write(master,b'o');wait('Options');wait('Preview only')
@@ -68,10 +70,12 @@ try:
  os.write(master,b'm');wait('Replace existing files for this batch?')
  os.write(master,b'\x1b[<0;8;25M');wait('then remove sources?')
  os.write(master,b'\r');wait('Move complete');ready()
- os.write(master,b'/\x15large\x1bc');wait('this may take a while')
- os.write(master,b'\x1b');wait('Copy cancelled')
+ os.write(master,b'/\x15large\x1bc');wait('Copy complete');ready()
+ assert b'this may take a while' not in data, 'large-copy warning still shown'
  os.write(master,b'\x15\x0e');wait('New folder:')
  os.write(master,b'new folder\r');wait('Folder created:')
+ os.write(master,b'P\x15\x1b[200~/definitely-missing-hop-ux-path\x1b[201~\r');wait('Folder not found:')
+ wait('PATH · Type a path');os.write(master,b'\x1b')
  os.write(master,b'\x03');wait('MANAGER_OK')
  assert p.wait(timeout=5)==0
  end=time.monotonic()+2
@@ -80,11 +84,12 @@ try:
  assert b'MB/s effective' in data and b'ETA' in data, 'missing transfer rate or ETA'
  assert b'Review copy' not in data and b'[Y/n' not in data,'copy escaped the panels'
  for frame in bytes(data).split(b'\x1b[H'):
-  if b'folders found' in frame or b'Copy complete' in frame or b'this may take a while' in frame:
+  if b'folders found' in frame or b'Copy complete' in frame:
    assert b'REMOTE' in frame and b'LOCAL' in frame,'transfer hid a pane'
  assert termios.tcgetattr(master)==initial,'terminal left raw'
  assert data.count(b'\x1b[?1049h')==1,'fullscreen restarted between panels/transfers'
- assert data.count(b'\x1b[?1049l')==1,'fullscreen exited during the session'
+ exits=[i for i in range(len(data)) if data.startswith(b'\x1b[?1049l',i)]
+ assert len(exits)==1, f'fullscreen exited {len(exits)} times at {[bytes(data[max(0,i-50):i+80]) for i in exits]}'
 finally:
  if p.poll() is None:p.kill();p.wait()
  os.close(master)
